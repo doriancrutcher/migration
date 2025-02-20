@@ -1,0 +1,18 @@
+All organization settings -
+User accounts and options for all organization members
+-https://docs.sentry.io/api/organizations/add-a-member-to-an-organization/
+-add members to teams, organizationmemberteam
+
+
+Projects and their settings - 
+Teams and their settings - 
+Alert rules
+Crons
+Dashboards
+Enabled data scrubbers
+Repositories
+Recent and saved searches
+
+
+members and member teams -- 
+what happens when I add a member? is an email triggered?
