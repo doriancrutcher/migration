@@ -53,10 +53,11 @@ Core (done, tagged `v1.0-core`):
 Foundation (do first):
 
 - `feat/selfhosted-source` -- shared live self-hosted reader that later features depend on.
+  Introduced as `selfhosted_source.py` in `feat/org-settings` and extended per feature.
 
 Milestone: settings
 
-- `feat/org-settings` -- Organization settings
+- `feat/org-settings` -- Organization settings (in review: governance + privacy whitelist)
 - `feat/project-settings` -- Projects and their settings
 - `feat/data-scrubbers` -- Enabled data scrubbers (needs the reader)
 - `feat/member-roles` -- User accounts / member options (roles)

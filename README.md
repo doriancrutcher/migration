@@ -40,8 +40,11 @@ Core scope covered (the delivered P0 minimum):
 | `assign_team_members.py` | Assign members to teams |
 | `migrate_alert_rules.py` | Recreate metric alert rules |
 | `check_duplicates.py` | Pre-flight: report team/project slug & name collisions across exports |
+| `selfhosted_source.py` | Read-only live client for the self-hosted API (source for data the export omits) |
+| `migrate_org_settings.py` | Migrate org governance + privacy settings (live self-hosted -> SaaS) |
 | `requirements.txt` | Python deps (`requests`) |
-| `ROADMAP.md` | Scope targets, phases, branch model |
+| `ROADMAP.md` | Scope targets, milestones, branch model |
+| `CHANGELOG.md` | Changes vs. upstream |
 | `docs/` | Setup + runbook documentation |
 | `create_sentry_projects` | STALE — ignore (older variant, broken against real exports) |
 
