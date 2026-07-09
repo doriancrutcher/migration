@@ -100,3 +100,19 @@ type (see `ROADMAP.md`).
   `feat/data-scrubbers` and `require2FA` is intentionally skipped -- both are recorded in the results
   file rather than silently dropped.
 
+### Added (feat/project-settings)
+
+- `selfhosted_source.py`: added `get_projects(org_slug)` (paginated project list) and
+  `get_project(org_slug, project_slug)` (full per-project settings) helpers.
+- `migrate_project_settings.py` (new): migrates per-project general settings from the live self-hosted
+  org to SaaS. **Greenfield** scope: pairs source -> destination projects by **name** (case-insensitive,
+  since phase-2 reassigned slugs but preserved names) and PUTs to the destination slug; unmatched source
+  projects are skipped and reported. Whitelist (`resolveAge`, `allowedDomains`, `scrapeJavaScript`,
+  `verifySSL`, `subjectPrefix`, `subjectTemplate`, `defaultEnvironment`, `highlightTags`,
+  `highlightContext`). Data-scrubbing fields deferred to `feat/data-scrubbers`; identity/advanced/risky
+  fields skipped -- both recorded per project. Includes `--dry-run`, per-project GET-back verification,
+  and a `project_settings_migration_results.json` results file. Needs a SaaS `project:write` token.
+- `ROADMAP.md`: marked org-settings and project-settings done; added a future `feat/collision-preflight`
+  hardening milestone for brownfield destinations (pre-flight collision report + per-type merge policy +
+  provenance).
+
