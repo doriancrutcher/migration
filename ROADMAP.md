@@ -1,66 +1,146 @@
 # Migration Roadmap
 
-Goal: migrate a full Sentry organization from **self-hosted v25 → Sentry SaaS**. The delivered
-minimum (core scope) is complete; the remaining data types are grouped into later phases so work can
-proceed without disturbing the checkpoint.
+Goal: migrate a full Sentry organization from **self-hosted v25 -> Sentry SaaS**. The core scope
+(Projects, Teams & Membership, Alert Rules) is complete and frozen at tag `v1.0-core`. Remaining data
+types are delivered one at a time as small feature branches merged into `main` via PR.
 
-## Scope targets and status
+## Branch model
 
-| # | Data type | Phase | Branch | Status |
-|---|-----------|-------|--------|--------|
-| 1 | Projects | phase-2-core | `phase-2-core` | Done |
-| 2 | Teams & membership | phase-2-core | `phase-2-core` | Done |
-| 3 | Alert rules (metric) | phase-2-core | `phase-2-core` | Done |
-| 4 | All organization settings | phase-3-settings | `phase-3-settings` | Planned |
-| 5 | Projects and their settings | phase-3-settings | `phase-3-settings` | Planned |
-| 6 | Teams and their settings | phase-3-settings | `phase-3-settings` | Planned |
-| 7 | Enabled data scrubbers | phase-3-settings | `phase-3-settings` | Planned |
-| 8 | User accounts and member options | phase-3-settings | `phase-3-settings` | Planned |
-| 9 | Crons | phase-4-content | `phase-4-content` | Planned |
-| 10 | Dashboards | phase-4-content | `phase-4-content` | Planned |
-| 11 | Repositories | phase-4-content | `phase-4-content` | Planned |
-| 12 | Recent and saved searches | phase-4-content | `phase-4-content` | Planned |
+- `main` -- integration trunk, started from the `v1.0-core` checkpoint. Default branch. Everything is
+  merged here via PR.
+- `master` -- pristine mirror of upstream `dgbailey/migration`; used only to pull Dustin's updates
+  (`git fetch upstream`). Never developed on.
+- `phase-2-core` + tag `v1.0-core` -- the frozen checkpoint. Never modified.
+- `feat/<data-type>` -- one branch per data type below, one PR into `main`.
 
-(Items 1-3 are the P0 minimum that was promised and delivered.)
+```mermaid
+flowchart TD
+  upstream["upstream/master = Dustin (pristine)"]
+  main["main = trunk (from v1.0-core)"]
+  upstream -.->|fetch when needed| main
+  main --> reader["feat/selfhosted-source (first)"]
+  reader --> main
+  main --> feat["feat/<data-type> (one PR each)"]
+  feat -->|PR| main
+```
 
-## Phases
+## Two data sources
 
-### phase-2-core (Done)
-Projects, Teams & Membership, Alert Rules. Tagged `v1.0-core`. See `README.md` and `docs/`.
+The relocation export (`export organizations`) only carries a subset of models, so there are two sources:
 
-### phase-3-settings (Planned)
-Configuration/governance data that layers onto the objects created in core:
-- All organization settings
-- Projects and their settings
-- Teams and their settings
-- Enabled data scrubbers (org- and project-level `sensitiveFields` / `scrubIPAddresses` / `dataScrubber`)
-- User accounts and per-member options (roles, notification options)
+- **Export-driven** -- parse `export.json` (what phase-2 uses). Covers what the export contains.
+- **Live self-hosted reader** -- `selfhosted_source.py`, a read-only client for the running
+  self-hosted API (`http://127.0.0.1:9000/api/0`). Covers everything the export omits.
 
-### phase-4-content (Planned)
-Higher-level content and integrations:
-- Crons (monitors)
-- Dashboards
-- Repositories (integration-dependent)
-- Recent and saved searches
+Confirmed against `migration-testing/export.json`:
+- In the export: `sentry.organization` (name, default_role, flags), `sentry.project` +
+  `sentry.projectoption` (non-default only) + `sentry.projectkey`, `sentry.team`,
+  `sentry.organizationmember` (real `role`), `sentry.rule`.
+- NOT in the export: `sentry.organizationoption` (org data-scrubbing defaults, retention),
+  `sentry.useroption`, `sentry.dashboard`, `sentry.monitor`, `sentry.repository`, `sentry.savedsearch`.
 
-## Candidate Sentry API references (starting points)
+New prereq for the live reader: a self-hosted auth token / internal integration with read scopes
+(`org:read`, `project:read`, `team:read`, `member:read`, `alerts:read`).
 
-- Add member to org: https://docs.sentry.io/api/organizations/add-a-member-to-an-organization/
-- Add members to teams (`organizationmemberteam`): member → team endpoints
-- Org settings: `GET/PUT /organizations/{org}/`
-- Project settings: `GET/PUT /projects/{org}/{project}/`
-- Team settings: `GET/PUT /teams/{org}/{team}/`
-- Dashboards: `/organizations/{org}/dashboards/`
-- Monitors (crons): `/organizations/{org}/monitors/`
-- Repositories: `/organizations/{org}/repos/`
-- Saved searches: `/organizations/{org}/searches/`
+## Status
 
-(Endpoints to be confirmed per data type during each phase.)
+Core (done, tagged `v1.0-core`):
+
+- Projects
+- Teams & membership
+- Alert rules (metric)
+
+Foundation (do first):
+
+- `feat/selfhosted-source` -- shared live self-hosted reader that later features depend on.
+
+Milestone: settings
+
+- `feat/org-settings` -- Organization settings
+- `feat/project-settings` -- Projects and their settings
+- `feat/data-scrubbers` -- Enabled data scrubbers (needs the reader)
+- `feat/member-roles` -- User accounts / member options (roles)
+- Teams and their settings -- verify-only (teams carry only name/slug/status; no dedicated branch
+  unless org-level team roles warrant one)
+
+Milestone: content (all live-API sourced; depend on the reader)
+
+- `feat/monitors` -- Crons
+- `feat/dashboards` -- Dashboards
+- `feat/repos` -- Repositories (integration-gated)
+- `feat/saved-searches` -- Saved searches (recent/per-user searches are out of scope)
+
+## Feature specs
+
+Every feature reuses the phase-2 mapping files as foreign-key currency
+(`project_team_sync_results.json` -> team ids + project slugs, `member_id_mappings.json` /
+`user_mappings_for_teams.json` -> member ids) and follows the pattern: `--dry-run`, writes a
+`*_results.json`, one new script file, core scripts untouched. Endpoint paths are best-known and to be
+confirmed during each build.
+
+### feat/selfhosted-source (foundation)
+- File: `selfhosted_source.py`. Read-only client for `http://127.0.0.1:9000/api/0` (auth, pagination,
+  errors). Mirror of the SaaS writer classes but GET-only.
+- Merges first; `feat/data-scrubbers` and all content features import it.
+
+### feat/org-settings
+- Source: export `sentry.organization` (default_role, flags) + live GET `/organizations/{org}/`.
+- Target: PUT `/organizations/{org}/` (whitelist: `defaultRole`, `openMembership`,
+  `allowJoinRequests`, `enhancedPrivacy`; skip slug/features/plan).
+- Deps: destination org exists. Script: `migrate_org_settings.py`.
+
+### feat/project-settings
+- Source: export `sentry.project` fields + `sentry.projectoption` + live GET `/projects/{org}/{proj}/`.
+- Target: PUT `/projects/{org}/{proj}/` (resolveAge, allowedDomains, scrapeJavaScript, subjectPrefix,
+  verifySSL).
+- Deps: phase-2 projects + slug map. Script: `migrate_project_settings.py`.
+
+### feat/data-scrubbers (needs reader)
+- Source: org-level via live GET `/organizations/{org}/` (`dataScrubber`, `dataScrubberDefaults`,
+  `sensitiveFields`, `safeFields`, `scrubIPAddresses`); project-level via export `sentry.projectoption`
+  (`sentry:sensitive_fields`, `sentry:scrub_data`, `sentry:scrub_ip_address`, `sentry:safe_fields`,
+  `sentry:scrub_defaults`) or live GET project.
+- Target: PUT org + PUT project. Deps: org + projects. Script: `migrate_data_scrubbers.py`.
+
+### feat/member-roles
+- Source: export `sentry.organizationmember.role`.
+- Target: preserve real role via PUT `/organizations/{org}/members/{member_id}/` `{orgRole}` after the
+  invite (needs a `member:admin` token). User notif options (`sentry.useroption`) are not in the export
+  and not admin-settable for other users -> documented as self-serve / out of scope.
+- Deps: phase-2 members + member id map. Script: `migrate_member_roles.py`.
+
+### feat/monitors (needs reader)
+- Source: live GET `/organizations/{org}/monitors/`.
+- Target: POST `/organizations/{org}/monitors/` (schedule, checkin_margin, max_runtime, timezone,
+  project). Deps: projects. Script: `migrate_monitors.py`.
+
+### feat/dashboards (needs reader)
+- Source: live GET `/organizations/{org}/dashboards/` + per-dashboard widgets.
+- Target: POST `/organizations/{org}/dashboards/`; remap widget project refs via the phase-2 map.
+- Script: `migrate_dashboards.py`.
+
+### feat/repos (needs reader)
+- Source: live GET `/organizations/{org}/repos/`.
+- Target: POST `/organizations/{org}/repos/` -- gated on the destination org having the source-code
+  integration (GitHub/GitLab) installed and authorized. Best-effort/partial; integration prereq
+  documented. Script: `migrate_repos.py`.
+
+### feat/saved-searches (needs reader)
+- Source: live GET `/organizations/{org}/searches/`.
+- Target: POST `/organizations/{org}/searches/`. Recent/per-user searches are out of scope.
+- Script: `migrate_saved_searches.py`.
+
+## Acceptance criteria (per feature/PR)
+
+- Dry-run prints the exact intended API call against the seeded/live source.
+- After a live run, the SaaS test org (`dorian-v25-migration`) matches source for the whitelisted fields.
+- Anything not carried is listed explicitly in the script output and here (no silent drops).
+- Merge order respects dependencies: `feat/selfhosted-source` first, then features that import it.
 
 ## Working model (do not disrupt the checkpoint)
 
-- `master` mirrors upstream `dgbailey/migration` (pristine; used to pull Dustin's updates).
-- `phase-2-core` holds the checkpoint commit and the `v1.0-core` tag — treat as frozen.
-- New work happens on `phase-3-settings` / `phase-4-content`, branched off the checkpoint.
-- Each new data type is a **new script file** following the established pattern (export-driven,
-  `--dry-run`, writes a mapping file). Existing core scripts are not modified on the new branches.
+- The `v1.0-core` tag and the core scripts are frozen; never modified.
+- One data type = one `feat/*` branch = one new script file = one PR into `main`. Near-zero conflicts
+  because features only add files.
+- Reuse the running slim-core self-hosted stack and the `dorian-v25-migration` SaaS test org as-is.
+- Pull Dustin's upstream updates via `git fetch upstream` into `master`, then merge into `main` if wanted.

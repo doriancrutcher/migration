@@ -3,10 +3,12 @@
 Fork of [github.com/dgbailey/migration](https://github.com/dgbailey/migration), annotated and fixed
 for the self-hosted v25 → Sentry SaaS migration effort.
 
-- **Roadmap and scope status:** [ROADMAP.md](ROADMAP.md)
+- **Roadmap, milestones, and branch model:** [ROADMAP.md](ROADMAP.md)
 - **Setup + runbook docs:** [docs/](docs/) (`phase-1` self-hosted setup, `phase-2` migration runbook)
 - **Checkpoint:** the core scope (Projects, Teams & Membership, Alert Rules) is complete and tagged
-  `v1.0-core` on the `phase-2-core` branch.
+  `v1.0-core` (also preserved on the frozen `phase-2-core` branch).
+- **Trunk:** `main` is the integration branch; remaining data types land as `feat/<data-type>` branches
+  merged via PR (see ROADMAP). `master` is a pristine mirror of upstream, used only to pull updates.
 
 ## What these scripts are
 
