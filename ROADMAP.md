@@ -71,6 +71,15 @@ Milestone: content (all live-API sourced; depend on the reader)
 - `feat/repos` -- Repositories (integration-gated)
 - `feat/saved-searches` -- Saved searches (recent/per-user searches are out of scope)
 
+Delivery (build last):
+
+- `feat/wizard` -- a single guided `migrate.py` the customer runs. Prompts for self-hosted URL + read
+  token, source org, SaaS org + write token, dry-run vs live, and a checklist of which data types to
+  migrate; then runs the selected feature modules in dependency order and writes one consolidated
+  results file. Built after the feature modules exist (it only orchestrates them). The per-feature
+  scripts remain independently runnable for debugging. No credentials are ever committed or shipped --
+  the operator supplies both tokens at run time.
+
 ## Feature specs
 
 Every feature reuses the phase-2 mapping files as foreign-key currency
