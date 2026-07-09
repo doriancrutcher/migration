@@ -8,8 +8,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SentryTeamMemberManager:
-    def __init__(self, auth_token: str, base_url: str = "https://sentry.io/api/0"):
+    def __init__(self, auth_token: str, base_url: str = "https://sentry.io/api/0", dry_run: bool = False):
         self.base_url = base_url
+        self.dry_run = dry_run
         self.headers = {
             "Authorization": f"Bearer {auth_token}",
             "Content-Type": "application/json"
@@ -36,7 +37,11 @@ class SentryTeamMemberManager:
         Add a member to a team
         """
         url = f"{self.base_url}/organizations/{org_slug}/members/{member_id}/teams/{team_slug}/"
-        
+
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] POST {url} (add member '{member_id}' to team '{team_slug}')")
+            return True
+
         try:
             response = requests.post(url, headers=self.headers)
             if response.status_code in [201, 202, 204]:  # All successful states
@@ -131,18 +136,25 @@ class SentryTeamMemberManager:
 
 def main():
     import sys
-    
-    if len(sys.argv) != 5:
-        print("Usage: python assign_team_members.py <auth_token> <organization_slug> <export.json> <member_mappings.json>")
-        sys.exit(1)
+    import argparse
 
-    auth_token = sys.argv[1]
-    org_slug = sys.argv[2]
-    export_file = sys.argv[3]
-    mappings_file = sys.argv[4]
+    parser = argparse.ArgumentParser(description='Assign Sentry members to teams')
+    parser.add_argument('auth_token', help='Sentry authentication token')
+    parser.add_argument('org_slug', help='Organization slug')
+    parser.add_argument('export_file', help='JSON export file path')
+    parser.add_argument('mappings_file', help='user_mappings_for_teams.json from add_sentry_members.py')
+    parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
+    args = parser.parse_args()
+
+    auth_token = args.auth_token
+    org_slug = args.org_slug
+    export_file = args.export_file
+    mappings_file = args.mappings_file
 
     try:
-        manager = SentryTeamMemberManager(auth_token)
+        if args.dry_run:
+            logger.info("=== DRY RUN: no changes will be made to SaaS ===")
+        manager = SentryTeamMemberManager(auth_token, dry_run=args.dry_run)
         results = manager.sync_team_members(export_file, mappings_file, org_slug)
         
         logger.info("Team member sync completed:")

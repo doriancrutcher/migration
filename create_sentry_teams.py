@@ -9,13 +9,15 @@ logger = logging.getLogger(__name__)
 
 #mapping requires teams to already exist
 class SentryTeamProjectMapper:
-    def __init__(self, auth_token: str, org_slug: str, base_url: str = "https://sentry.io/api/0"):
+    def __init__(self, auth_token: str, org_slug: str, base_url: str = "https://sentry.io/api/0", dry_run: bool = False):
         self.base_url = base_url
         self.org_slug = org_slug
+        self.dry_run = dry_run
         self.headers = {
             "Authorization": f"Bearer {auth_token}",
             "Content-Type": "application/json"
         }
+        self._dry_run_team_id = 0
 
     def load_export_data(self, export_file_path: str) -> List[Dict]:
         """
@@ -107,7 +109,11 @@ class SentryTeamProjectMapper:
         Add a team to a project using the Sentry API
         """
         url = f"{self.base_url}/projects/{self.org_slug}/{project_slug}/teams/{team_slug}/"
-        
+
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] POST {url} (attach team '{team_slug}' to project '{project_slug}')")
+            return True
+
         try:
             response = requests.post(url, headers=self.headers)
             response.raise_for_status()
@@ -128,7 +134,13 @@ class SentryTeamProjectMapper:
         payload = {"name": team_name}
         if team_slug:
             payload["slug"] = team_slug
-        
+
+        if self.dry_run:
+            self._dry_run_team_id += 1
+            fake_id = f"dryrun-{self._dry_run_team_id}"
+            logger.info(f"[DRY-RUN] POST {url} payload={json.dumps(payload)} -> fake id {fake_id}")
+            return {"id": fake_id, "slug": team_slug or team_name, "name": team_name, "dry_run": True}
+
         try:
             response = requests.post(url, headers=self.headers, json=payload)
             response.raise_for_status()
@@ -209,17 +221,23 @@ class SentryTeamProjectMapper:
 
 def main():
     import sys
-    
-    if len(sys.argv) != 4:
-        print("Usage: python create_sentry_teams.py <auth_token> <organization_slug> <export.json>")
-        sys.exit(1)
+    import argparse
 
-    auth_token = sys.argv[1]
-    org_slug = sys.argv[2]
-    export_file = sys.argv[3]
+    parser = argparse.ArgumentParser(description='Create Sentry teams and map them to projects')
+    parser.add_argument('auth_token', help='Sentry authentication token')
+    parser.add_argument('org_slug', help='Organization slug')
+    parser.add_argument('export_file', help='JSON export file path')
+    parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
+    args = parser.parse_args()
+
+    auth_token = args.auth_token
+    org_slug = args.org_slug
+    export_file = args.export_file
 
     try:
-        mapper = SentryTeamProjectMapper(auth_token, org_slug)
+        if args.dry_run:
+            logger.info("=== DRY RUN: no changes will be made to SaaS ===")
+        mapper = SentryTeamProjectMapper(auth_token, org_slug, dry_run=args.dry_run)
         results = mapper.sync_project_teams(export_file, org_slug)
         
         logger.info("Project-team sync completed:")

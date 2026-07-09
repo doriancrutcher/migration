@@ -12,13 +12,16 @@ logger = logging.getLogger(__name__)
 
 #does not send invite emails. integration tokens are restricted to invting member roles only
 class SentryMemberManager:
-    def __init__(self, auth_token: str, test_email: str = None, base_url: str = "https://sentry.io/api/0"):
+    def __init__(self, auth_token: str, test_email: str = None, base_url: str = "https://sentry.io/api/0", dry_run: bool = False, send_invite: bool = False):
         self.base_url = base_url
+        self.dry_run = dry_run
+        self.send_invite = send_invite
         self.headers = {
             "Authorization": f"Bearer {auth_token}",
             "Content-Type": "application/json"
         }
         self.test_email = test_email
+        self._dry_run_member_id = 0
 
     def generate_test_email(self, original_email: str, internal_id: str) -> str:
         """
@@ -137,7 +140,11 @@ class SentryMemberManager:
         Delete a member from the organization
         """
         url = f"{self.base_url}/organizations/{org_slug}/members/{member_id}/"
-        
+
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] DELETE {url}")
+            return True
+
         try:
             response = requests.delete(url, headers=self.headers)
             response.raise_for_status()
@@ -197,14 +204,20 @@ class SentryMemberManager:
         payload = {
             "email": email,
             "orgRole": "member",# restricted to member role via integration token
-            "sendInvite": False,  # Don't send invite emails,
-            "reinvite": False # Don't reinvite
+            "sendInvite": self.send_invite,  # controlled by --send-invite
+            "reinvite": self.send_invite # controlled by --send-invite
         }
         
         # if team_roles:
         #     payload["teamRoles"] = team_roles
         #     del payload["orgRole"]
-            
+
+        if self.dry_run:
+            self._dry_run_member_id += 1
+            fake_id = f"dryrun-{self._dry_run_member_id}"
+            logger.info(f"[DRY-RUN] POST {url} payload={json.dumps(payload)} -> fake id {fake_id}")
+            return {"id": fake_id, "email": email, "dry_run": True}
+
         try:
             response = requests.post(url, headers=self.headers, json=payload)
             response.raise_for_status()
@@ -222,11 +235,17 @@ def main():
     parser.add_argument('--delete', help='Delete members using mappings file', metavar='MAPPINGS_FILE')
     parser.add_argument('--export-file', help='Export JSON file path for adding members')
     parser.add_argument('--test', help='Test mode with Gmail alias (e.g., your.email@gmail.com)', metavar='EMAIL')
-    
+    parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
+    parser.add_argument('--send-invite', action='store_true', help='Send invitation emails (sets sendInvite/reinvite true)')
+
     args = parser.parse_args()
 
     try:
-        manager = SentryMemberManager(args.auth_token, test_email=args.test)
+        if args.dry_run:
+            logger.info("=== DRY RUN: no changes will be made to SaaS ===")
+        if args.send_invite:
+            logger.info("=== send-invite ON: invitation emails will be sent ===")
+        manager = SentryMemberManager(args.auth_token, test_email=args.test, dry_run=args.dry_run, send_invite=args.send_invite)
         
         if args.delete:
             # Delete mode
