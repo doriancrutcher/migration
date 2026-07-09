@@ -30,8 +30,14 @@ from datetime import datetime
 
 from selfhosted_source import SelfHostedSource
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _fmt(value, limit: int = 100) -> str:
+    """Compact, readable rendering of a setting value (truncated if very long)."""
+    s = json.dumps(value)
+    return s if len(s) <= limit else s[: limit - 3] + "..."
 
 # Core general project settings carried by this feature.
 PROJECT_SETTINGS_WHITELIST = [
@@ -110,7 +116,7 @@ class ProjectSettingsMigrator:
     def update_project(self, dest_org: str, dest_slug: str, payload: dict) -> dict:
         url = f"{self.base_url}/projects/{dest_org}/{dest_slug}/"
         if self.dry_run:
-            logger.info(f"[DRY-RUN] PUT {url} payload={json.dumps(payload)}")
+            logger.info(f"  action      : [DRY-RUN] would PUT {url} (not sent)")
             return {"dry_run": True}
         try:
             resp = requests.put(url, headers=self.headers, json=payload)
@@ -185,21 +191,35 @@ def main():
         deferred_present = {k: src_full.get(k) for k in DEFERRED_TO_DATA_SCRUBBERS if k in src_full}
         skipped_present = [k for k in SKIPPED if k in src_full]
 
-        logger.info(
-            f"'{name}': source '{src['slug']}' -> dest '{dest_slug}' | "
-            f"applying {len(payload)} setting(s): {json.dumps(payload)}"
-        )
-        logger.info(f"  deferred to feat/data-scrubbers: {list(deferred_present)}")
+        logger.info("")
+        logger.info("-" * 64)
+        logger.info(f"Project: {name}")
+        logger.info(f"  source slug : {src['slug']}")
+        logger.info(f"  dest slug   : {dest_slug}")
+        if payload:
+            key_w = max(len(k) for k in payload)
+            logger.info(f"  settings applied ({len(payload)}):")
+            for k, v in payload.items():
+                logger.info(f"      {k.ljust(key_w)} = {_fmt(v)}")
+        else:
+            logger.info("  settings applied (0): none present on source")
+        if deferred_present:
+            logger.info(
+                f"  deferred    : {len(deferred_present)} data-scrubber field(s) -> feat/data-scrubbers"
+                f" ({', '.join(deferred_present)})"
+            )
 
         migrator.update_project(args.dest_org, dest_slug, payload)
 
         mismatches = {}
-        if not args.dry_run:
+        if args.dry_run:
+            logger.info("  verify      : skipped (dry-run)")
+        else:
             mismatches = migrator.verify(args.dest_org, dest_slug, payload)
             if mismatches:
-                logger.warning(f"  verification mismatches: {json.dumps(mismatches)}")
+                logger.warning(f"  verify      : MISMATCH {_fmt(mismatches, 200)}")
             else:
-                logger.info("  verification passed.")
+                logger.info("  verify      : passed")
 
         per_project.append({
             "source_name": name,
@@ -223,10 +243,26 @@ def main():
     }
     with open("project_settings_migration_results.json", "w") as f:
         json.dump(results, f, indent=2)
-    logger.info(
-        f"Done. Matched {len(per_project)}, unmatched {len(unmatched)}. "
-        "Wrote project_settings_migration_results.json"
-    )
+
+    logger.info("")
+    logger.info("=" * 64)
+    mode = "DRY RUN (nothing written)" if args.dry_run else "LIVE"
+    logger.info(f"Summary [{mode}]: matched {len(per_project)}, unmatched {len(unmatched)}")
+    if per_project:
+        name_w = max(len(p["source_name"]) for p in per_project)
+        for p in per_project:
+            if args.dry_run:
+                status = "would apply"
+            else:
+                status = "OK" if not p["verification_mismatches"] else "MISMATCH"
+            logger.info(
+                f"  {p['source_name'].ljust(name_w)}  {p['source_slug']} -> {p['dest_slug']}"
+                f"  ({len(p['applied'])} settings)  {status}"
+            )
+    for u in unmatched:
+        logger.info(f"  [UNMATCHED] {u['source_name']} (source slug '{u['source_slug']}') - no SaaS project by that name")
+    logger.info("")
+    logger.info("Wrote project_settings_migration_results.json")
 
 
 if __name__ == "__main__":
