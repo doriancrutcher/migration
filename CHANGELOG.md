@@ -112,6 +112,9 @@ type (see `ROADMAP.md`).
   `highlightContext`). Data-scrubbing fields deferred to `feat/data-scrubbers`; identity/advanced/risky
   fields skipped -- both recorded per project. Includes `--dry-run`, per-project GET-back verification,
   and a `project_settings_migration_results.json` results file. Needs a SaaS `project:write` token.
+- `migrate_project_settings.py`: human-readable run output -- dropped the logger prefix, one aligned
+  per-project block (source/dest, `key = value` settings, deferred summary, action, verify) and a final
+  summary table. Output only; behavior and results file unchanged.
 - `ROADMAP.md`: marked org-settings and project-settings done; added a future `feat/collision-preflight`
   hardening milestone for brownfield destinations (pre-flight collision report + per-type merge policy +
   provenance).
