@@ -60,7 +60,8 @@ Milestone: settings
 - `feat/org-settings` -- Organization settings (DONE, merged: governance + privacy whitelist)
 - `feat/project-settings` -- Projects and their settings (DONE, merged: core general-settings whitelist,
   greenfield / match-by-name)
-- `feat/data-scrubbers` -- Enabled data scrubbers (needs the reader)
+- `feat/data-scrubbers` -- Enabled data scrubbers (DONE, merged: standard scrubbers, org + project;
+  advanced custom-PII excluded per DECISIONS.md D5)
 - `feat/member-roles` -- User accounts / member options (roles)
 - Teams and their settings -- verify-only (teams carry only name/slug/status; no dedicated branch
   unless org-level team roles warrant one)
@@ -126,12 +127,14 @@ confirmed during each build.
 - Deps: phase-2 projects + the live reader (`selfhosted_source.py`). Script:
   `migrate_project_settings.py`. Needs a SaaS token with `project:write`.
 
-### feat/data-scrubbers (needs reader)
-- Source: org-level via live GET `/organizations/{org}/` (`dataScrubber`, `dataScrubberDefaults`,
-  `sensitiveFields`, `safeFields`, `scrubIPAddresses`); project-level via export `sentry.projectoption`
-  (`sentry:sensitive_fields`, `sentry:scrub_data`, `sentry:scrub_ip_address`, `sentry:safe_fields`,
-  `sentry:scrub_defaults`) or live GET project.
-- Target: PUT org + PUT project. Deps: org + projects. Script: `migrate_data_scrubbers.py`.
+### feat/data-scrubbers (DONE)
+- Source: live GET `/organizations/{org}/` (org level) and per-project GET `/projects/{org}/{proj}/`.
+- Whitelist (standard, both levels): `dataScrubber`, `dataScrubberDefaults`, `sensitiveFields`,
+  `safeFields`, `scrubIPAddresses`, `storeCrashReports`. Advanced `relayPiiConfig` / `trustedRelays`
+  excluded (recorded, not dropped) -- see DECISIONS.md D5.
+- Matching: projects paired by name (reuses feat/project-settings). Target: PUT org + PUT each project.
+  `--org-only` / `--projects-only` scope flags. Deps: org + projects + the live reader. Script:
+  `migrate_data_scrubbers.py`. Needs a SaaS `org:write` + `project:write` token.
 
 ### feat/member-roles
 - Source: export `sentry.organizationmember.role`.

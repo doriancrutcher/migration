@@ -1,0 +1,47 @@
+# Migration Decisions Log
+
+A running record of scope/design choices made per feature -- especially things we intentionally
+deferred or excluded and may want to revisit. Newest first. Each entry: what was decided, why, and
+what would change it.
+
+## D5 - Data scrubbers: standard fields only, advanced custom-PII deferred
+- Feature: `feat/data-scrubbers`
+- Decision: migrate the **standard** data-scrubbing settings at both org and project level
+  (`dataScrubber`, `dataScrubberDefaults`, `sensitiveFields`, `safeFields`, `scrubIPAddresses`,
+  `storeCrashReports`). **Do NOT** migrate the advanced custom-PII fields `relayPiiConfig`
+  (custom PII/scrubbing rules) or `trustedRelays`.
+- Why: the advanced fields are complex, relay-dependent, and higher-risk to copy blindly; the standard
+  set fully covers the "Enabled data scrubbers" checklist item.
+- Revisit if: the customer relies on custom PII rules (`relayPiiConfig`) or runs trusted Relays and
+  needs them carried over. Would be a follow-up (e.g. `feat/data-scrubbers-advanced`).
+
+## D4 - Project matching is by name (greenfield assumption)
+- Feature: `feat/project-settings` (and reused by `feat/data-scrubbers`)
+- Decision: pair self-hosted -> SaaS projects by **name** (case-insensitive); PUT to the destination's
+  own slug. Unmatched projects are skipped and reported, never guessed.
+- Why: phase-2 reassigned SaaS slugs but preserved names; names are the stable key. Assumes names are
+  unique and unchanged, and the destination org is effectively empty (greenfield).
+- Revisit if: brownfield destinations (existing/in-use SaaS org), duplicate/renamed project names, or
+  multi-org consolidation. Tracked as the `feat/collision-preflight` milestone (per-type collision
+  report + policy + provenance) in ROADMAP.
+
+## D3 - Organization settings: require2FA skipped
+- Feature: `feat/org-settings`
+- Decision: do not migrate `require2FA`.
+- Why: enabling it on the destination could lock out members who don't yet have 2FA set up.
+- Revisit if: the customer explicitly wants 2FA enforcement carried over (with a member-readiness check
+  first). Recorded in the results file as skipped, not silently dropped.
+
+## D2 - Member roles flattened to "member" at invite time
+- Feature: core (phase-2)
+- Decision: all migrated members are invited as `member`.
+- Why: internal-integration tokens can only invite at the `member` role.
+- Revisit if: real roles must be preserved -> `feat/member-roles` (PUT the true `orgRole` after invite,
+  needs a `member:admin` token).
+
+## D1 - Alerts: metric alerts only
+- Feature: core (phase-2)
+- Decision: migrate metric alert rules; issue alerts (`sentry.rule`) are detected and reported as
+  skipped, not migrated. Notification actions are not preserved (a default action is injected).
+- Why: issue alerts use a different endpoint/schema; out of the promised core scope.
+- Revisit if: issue alerts / real notification actions are required -> a dedicated alerts follow-up.

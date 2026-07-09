@@ -112,7 +112,24 @@ type (see `ROADMAP.md`).
   `highlightContext`). Data-scrubbing fields deferred to `feat/data-scrubbers`; identity/advanced/risky
   fields skipped -- both recorded per project. Includes `--dry-run`, per-project GET-back verification,
   and a `project_settings_migration_results.json` results file. Needs a SaaS `project:write` token.
+- `migrate_project_settings.py`: human-readable run output -- dropped the logger prefix, one aligned
+  per-project block (source/dest, `key = value` settings, deferred summary, action, verify) and a final
+  summary table. Output only; behavior and results file unchanged.
 - `ROADMAP.md`: marked org-settings and project-settings done; added a future `feat/collision-preflight`
   hardening milestone for brownfield destinations (pre-flight collision report + per-type merge policy +
   provenance).
+
+### Added (feat/data-scrubbers)
+
+- `migrate_data_scrubbers.py` (new): migrates the **standard** data-scrubbing settings deferred by the
+  two settings features, at **both** org and project level, from the live self-hosted instance to SaaS.
+  Whitelist (`dataScrubber`, `dataScrubberDefaults`, `sensitiveFields`, `safeFields`, `scrubIPAddresses`,
+  `storeCrashReports`). Org via `PUT /organizations/{org}/`; projects paired by name (reusing the
+  project-settings matching) via `PUT /projects/{org}/{proj}/`. `--org-only` / `--projects-only` scope
+  flags, `--dry-run`, per-target GET-back verification, and a `data_scrubbers_migration_results.json`
+  results file. The advanced custom-PII fields `relayPiiConfig` and `trustedRelays` are intentionally
+  excluded (recorded, not dropped) -- see `DECISIONS.md` (D5). Needs a SaaS `org:write` + `project:write`
+  token.
+- `DECISIONS.md` (new): running log of scope/design choices we may revisit (advanced scrubbers deferral,
+  project match-by-name/greenfield, `require2FA` skip, member-role flattening, metric-alerts-only).
 

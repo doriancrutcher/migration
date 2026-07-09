@@ -5,6 +5,7 @@ for the self-hosted v25 → Sentry SaaS migration effort.
 
 - **Roadmap, milestones, and branch model:** [ROADMAP.md](ROADMAP.md)
 - **Changelog (vs. upstream):** [CHANGELOG.md](CHANGELOG.md)
+- **Scope decisions log (deferrals to revisit):** [DECISIONS.md](DECISIONS.md)
 - **Setup + runbook docs:** [docs/](docs/) (`phase-1` self-hosted setup, `phase-2` migration runbook)
 - **Checkpoint:** the core scope (Projects, Teams & Membership, Alert Rules) is complete and tagged
   `v1.0-core` (also preserved on the frozen `phase-2-core` branch).
@@ -43,6 +44,7 @@ Core scope covered (the delivered P0 minimum):
 | `selfhosted_source.py` | Read-only live client for the self-hosted API (source for data the export omits) |
 | `migrate_org_settings.py` | Migrate org governance + privacy settings (live self-hosted -> SaaS) |
 | `migrate_project_settings.py` | Migrate per-project general settings (live self-hosted -> SaaS; matches projects by name) |
+| `migrate_data_scrubbers.py` | Migrate standard data-scrubbing settings at org + project level (excludes advanced custom-PII) |
 | `requirements.txt` | Python deps (`requests`) |
 | `ROADMAP.md` | Scope targets, milestones, branch model |
 | `CHANGELOG.md` | Changes vs. upstream |
