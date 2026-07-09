@@ -42,6 +42,7 @@ Core scope covered (the delivered P0 minimum):
 | `check_duplicates.py` | Pre-flight: report team/project slug & name collisions across exports |
 | `selfhosted_source.py` | Read-only live client for the self-hosted API (source for data the export omits) |
 | `migrate_org_settings.py` | Migrate org governance + privacy settings (live self-hosted -> SaaS) |
+| `migrate_project_settings.py` | Migrate per-project general settings (live self-hosted -> SaaS; matches projects by name) |
 | `requirements.txt` | Python deps (`requests`) |
 | `ROADMAP.md` | Scope targets, milestones, branch model |
 | `CHANGELOG.md` | Changes vs. upstream |

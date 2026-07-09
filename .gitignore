@@ -16,9 +16,11 @@ team_member_assignments.json
 member_deletion_results.json
 alert_rule_migration_results_*.json
 org_settings_migration_results.json
+project_settings_migration_results.json
 duplicate_report.json
 dryrun-out/
 .sh_read_token
+.saas_token
 
 # OS
 .DS_Store

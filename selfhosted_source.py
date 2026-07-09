@@ -59,3 +59,12 @@ class SelfHostedSource:
     def get_org(self, org_slug: str) -> dict:
         """GET /organizations/{slug}/ -> detailed org (settings already in SaaS field names)."""
         return self.get(f"/organizations/{org_slug}/")
+
+    def get_projects(self, org_slug: str) -> list:
+        """GET /organizations/{slug}/projects/ -> all projects (paginated). The list payload is
+        lightweight; use get_project() for the full per-project settings."""
+        return self.get_paginated(f"/organizations/{org_slug}/projects/")
+
+    def get_project(self, org_slug: str, project_slug: str) -> dict:
+        """GET /projects/{org}/{project}/ -> detailed project (settings already in SaaS field names)."""
+        return self.get(f"/projects/{org_slug}/{project_slug}/")

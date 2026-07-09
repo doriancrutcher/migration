@@ -57,8 +57,9 @@ Foundation (do first):
 
 Milestone: settings
 
-- `feat/org-settings` -- Organization settings (in review: governance + privacy whitelist)
-- `feat/project-settings` -- Projects and their settings
+- `feat/org-settings` -- Organization settings (DONE, merged: governance + privacy whitelist)
+- `feat/project-settings` -- Projects and their settings (DONE, merged: core general-settings whitelist,
+  greenfield / match-by-name)
 - `feat/data-scrubbers` -- Enabled data scrubbers (needs the reader)
 - `feat/member-roles` -- User accounts / member options (roles)
 - Teams and their settings -- verify-only (teams carry only name/slug/status; no dedicated branch
@@ -80,6 +81,19 @@ Delivery (build last):
   scripts remain independently runnable for debugging. No credentials are ever committed or shipped --
   the operator supplies both tokens at run time.
 
+Hardening (future; needed before brownfield customers):
+
+- `feat/collision-preflight` -- today every feature assumes a **greenfield** destination (a fresh SaaS
+  org we control). Real customers may migrate into an **existing, in-use** org, where names/slugs can
+  collide with objects the customer already relies on. This milestone adds:
+  - a `--dry-run` **pre-flight report** per data type ("these already exist in the destination"),
+    generalizing `check_duplicates.py` from export-vs-export to source-vs-live-destination;
+  - a configurable **per-type policy** (`skip` / `rename` / `merge` / `overwrite` / `fail`);
+  - **provenance tracking** so re-runs only touch migration-created objects (safe idempotency);
+  - a safe default of report-only / skip for org-level and security settings.
+  Open question for the customer: are migrations always into a fresh org, or sometimes brownfield? That
+  answer decides how much of this we build.
+
 ## Feature specs
 
 Every feature reuses the phase-2 mapping files as foreign-key currency
@@ -99,11 +113,18 @@ confirmed during each build.
   `allowJoinRequests`, `enhancedPrivacy`; skip slug/features/plan).
 - Deps: destination org exists. Script: `migrate_org_settings.py`.
 
-### feat/project-settings
-- Source: export `sentry.project` fields + `sentry.projectoption` + live GET `/projects/{org}/{proj}/`.
-- Target: PUT `/projects/{org}/{proj}/` (resolveAge, allowedDomains, scrapeJavaScript, subjectPrefix,
-  verifySSL).
-- Deps: phase-2 projects + slug map. Script: `migrate_project_settings.py`.
+### feat/project-settings (DONE)
+- Source: live GET `/organizations/{org}/projects/` then per-project GET `/projects/{org}/{proj}/`.
+- Matching (greenfield): pair source -> destination by project **name** (case-insensitive), then PUT
+  using the destination's own slug (phase-2 reassigned slugs but preserved names). Source projects with
+  no name match are skipped and reported; brownfield collision handling is deferred (see below).
+- Target: PUT `/projects/{org}/{proj}/`. Whitelist (core general settings): `resolveAge`,
+  `allowedDomains`, `scrapeJavaScript`, `verifySSL`, `subjectPrefix`, `subjectTemplate`,
+  `defaultEnvironment`, `highlightTags`, `highlightContext`. Data-scrubbing fields are deferred to
+  `feat/data-scrubbers`; identity/advanced/risky fields are skipped. Both groups are recorded per
+  project in the results file.
+- Deps: phase-2 projects + the live reader (`selfhosted_source.py`). Script:
+  `migrate_project_settings.py`. Needs a SaaS token with `project:write`.
 
 ### feat/data-scrubbers (needs reader)
 - Source: org-level via live GET `/organizations/{org}/` (`dataScrubber`, `dataScrubberDefaults`,
