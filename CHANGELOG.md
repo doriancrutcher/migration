@@ -116,3 +116,17 @@ type (see `ROADMAP.md`).
   hardening milestone for brownfield destinations (pre-flight collision report + per-type merge policy +
   provenance).
 
+### Added (feat/data-scrubbers)
+
+- `migrate_data_scrubbers.py` (new): migrates the **standard** data-scrubbing settings deferred by the
+  two settings features, at **both** org and project level, from the live self-hosted instance to SaaS.
+  Whitelist (`dataScrubber`, `dataScrubberDefaults`, `sensitiveFields`, `safeFields`, `scrubIPAddresses`,
+  `storeCrashReports`). Org via `PUT /organizations/{org}/`; projects paired by name (reusing the
+  project-settings matching) via `PUT /projects/{org}/{proj}/`. `--org-only` / `--projects-only` scope
+  flags, `--dry-run`, per-target GET-back verification, and a `data_scrubbers_migration_results.json`
+  results file. The advanced custom-PII fields `relayPiiConfig` and `trustedRelays` are intentionally
+  excluded (recorded, not dropped) -- see `DECISIONS.md` (D5). Needs a SaaS `org:write` + `project:write`
+  token.
+- `DECISIONS.md` (new): running log of scope/design choices we may revisit (advanced scrubbers deferral,
+  project match-by-name/greenfield, `require2FA` skip, member-role flattening, metric-alerts-only).
+
