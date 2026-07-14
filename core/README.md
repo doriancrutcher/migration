@@ -3,7 +3,7 @@
 The delivered P0 minimum. Five export-driven scripts that recreate a subset of a self-hosted org in SaaS.
 They read a self-hosted **export** and POST to `https://sentry.io/api/0`; they do not call the self-hosted API.
 
-- **Dependencies:** `requests` (`pip install -r ../requirements.txt`).
+- **Dependencies:** `requests` (`pip install "requests>=2.31.0"`).
 - All five accept `--dry-run` (logs the exact method/URL/payload without calling the API). **Always dry-run first.**
 
 ## Run order (hard dependencies)
