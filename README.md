@@ -132,10 +132,12 @@ Why this order:
   opens offline in any browser) - a readable/shareable view of the same report.
 - Offline only (never calls SaaS); one export file == one org. Use it BEFORE migrating when several
   self-hosted orgs are being merged into one SaaS org. Reports:
-  - **PROJECT NAME** collisions (Danger - SaaS derives the slug from the name, so same-name projects clash),
+  - **PROJECT** collisions (Danger - projects are created by name and SaaS derives the slug, so names that
+    slugify to the same value clash; detected on the **derived slug**, which also catches different names
+    that map to the same slug),
   - **TEAM SLUG** collisions (Danger - slug must be unique),
   - **TEAM NAME** collisions with a **membership diff** (same team name, different rosters per org; Info),
-  - **PROJECT SLUG** collisions and **similar org names** (Info).
+  - **similar org names** (Info).
 - Two severities: **Danger** = will break a merged migration, resolve first (non-zero exit); **Info** =
   won't block, but a human should review. The HTML report includes a severity legend.
 - Writes `duplicate_report.json` and exits non-zero if any Danger collision is found.

@@ -8,12 +8,12 @@ resolved (rename / merge / drop) up front.
 Source: JSON exports only (no live instance) -- see DECISIONS.md D7. One export file == one org.
 
 What counts as a hard blocker for a merged create (vs. informational):
-  - PROJECT NAME collision  -> HARD. Projects are created by name and SaaS derives the slug from it, so
-    two projects with the same name across orgs would produce the same slug and clash.
-  - TEAM SLUG collision      -> HARD. Teams are created with an explicit slug, which must be unique.
+  - PROJECT collision        -> DANGER. Projects are created by name and SaaS derives the slug from it, so
+    projects whose names slugify to the same value clash. Detected on the DERIVED slug (slugify(name)),
+    which also catches different names that map to the same slug (e.g. "Payments API" vs "payments-api").
+  - TEAM SLUG collision      -> DANGER. Teams are created with an explicit slug, which must be unique.
   - TEAM NAME collision      -> informational, but flagged with a MEMBERSHIP DIFF (same team name, but a
     different set of people in each org -- a real merge hazard).
-  - PROJECT SLUG collision   -> informational (slug is not sent on project create).
   - SIMILAR ORG NAMES        -> informational (helps spot Dor-Org1 / Dor-Org2 / Dor-Org3 families).
 
 Usage:
@@ -23,6 +23,7 @@ Usage:
 Writes duplicate_report.json (and, with --html, a self-contained duplicate_report.html) and exits
 non-zero if any HARD collision is found.
 """
+import re
 import sys
 import json
 import html as html_lib
@@ -38,6 +39,12 @@ logger = logging.getLogger(__name__)
 
 def _norm(s: str) -> str:
     return (s or "").strip().lower()
+
+
+def slugify(name: str) -> str:
+    """Approximate how Sentry derives a project slug from its name (lowercase, non-alphanumeric -> '-').
+    This is what actually gets created on SaaS, so two names that slugify the same will clash."""
+    return re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
 
 
 def load(path: str):
@@ -104,9 +111,16 @@ def _group(orgs, extractor):
 
 
 def project_collisions(orgs):
-    name_dups = _group(orgs, lambda o: [(_norm(p["name"]), p) for p in o["projects"]])
-    slug_dups = _group(orgs, lambda o: [(_norm(p["slug"]), p) for p in o["projects"]])
-    return name_dups, slug_dups
+    """Group projects across orgs by their DERIVED slug (slugify(name)). The migration creates projects by
+    name and SaaS derives the slug, so a shared derived slug is what actually clashes in a merged org --
+    this also catches different names that slugify to the same value (e.g. 'Payments API' vs 'payments-api')."""
+    def extract(o):
+        rows = []
+        for p in o["projects"]:
+            derived = slugify(p["name"]) or _norm(p["slug"])
+            rows.append((derived, {"slug": p["slug"], "name": p["name"], "derived": derived}))
+        return rows
+    return _group(orgs, extract)
 
 
 def team_collisions_with_membership(orgs, key_field):
@@ -161,8 +175,8 @@ def _print_project_section(title, dups, note):
         logger.info("  none")
         return
     for key, group in sorted(dups.items()):
-        where = ", ".join(f"{org} (slug '{p['slug']}', name '{p['name']}')" for org, p in group)
-        logger.info(f"  '{key}' in {len(group)} orgs: {where}   [{note}]")
+        where = ", ".join(f"{org} (name '{p['name']}', slug '{p['slug']}')" for org, p in group)
+        logger.info(f"  derived-slug '{key}' in {len(group)} orgs: {where}   [{note}]")
 
 
 def _print_team_section(title, collisions, note):
@@ -191,19 +205,24 @@ def _html_project_section(title, note_class, dups):
         return f'<section><h2>{esc(title)}</h2><p class="empty">none</p></section>'
     rows = []
     for key, group in sorted(dups.items()):
-        orgs = "".join(
-            f'<li><span class="org">{esc(item["org"])}</span> '
-            f'&mdash; slug <code>{esc(item["slug"])}</code>, name &ldquo;{esc(item["name"])}&rdquo;</li>'
-            for item in group
-        )
+        items = []
+        for item in group:
+            note = ""
+            if _norm(item["slug"]) != _norm(item.get("derived_slug", "")):
+                note = f' <span class="note">(source slug <code>{esc(item["slug"])}</code>)</span>'
+            items.append(
+                f'<li><span class="org">{esc(item["org"])}</span> '
+                f'&mdash; name &ldquo;{esc(item["name"])}&rdquo;{note}</li>'
+            )
+        orgs = "".join(items)
         rows.append(
-            f'<tr><td class="key">{esc(key)}</td>'
+            f'<tr><td class="key"><code>{esc(key)}</code></td>'
             f'<td><span class="badge {note_class}">{esc(note_class.upper())}</span></td>'
             f'<td><ul class="orglist">{orgs}</ul></td></tr>'
         )
     return (
         f'<section><h2>{esc(title)}</h2>'
-        f'<table><thead><tr><th>Value</th><th>Severity</th><th>Appears in</th></tr></thead>'
+        f'<table><thead><tr><th>Derived slug</th><th>Severity</th><th>Appears in</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></section>'
     )
 
@@ -309,6 +328,7 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
   code {{ background: #f2f2f2; padding: 1px 5px; border-radius: 4px; font-size: 12px; }}
   .key {{ font-weight: 600; }}
   .orglist {{ margin: 0; padding-left: 18px; }}
+  .note {{ color: #888; font-size: 12px; }}
   .badge {{ display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
     letter-spacing: .02em; }}
   .badge.danger {{ background: #fdecea; color: #b3261e; }}
@@ -347,9 +367,8 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
     <div class="bignum {hard_class}">{hard}</div>
     <div class="counts">
       <div><b>{hard}</b> Danger collision group(s) &mdash; block a merged migration</div>
-      <div>project-name {s["project_name_collisions"]} &middot; team-slug {s["team_slug_collisions"]}
+      <div>project {s["project_collisions"]} &middot; team-slug {s["team_slug_collisions"]}
         &middot; team-name {s["team_name_collisions"]} (info) &middot;
-        project-slug {s["project_slug_collisions"]} (info) &middot;
         similar-names {s["similar_org_name_pairs"]} (info)</div>
     </div>
   </div>
@@ -358,18 +377,17 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
     <div class="legtitle">Severity reference</div>
     <div class="legitem"><span class="badge danger">DANGER</span>Will break a merged migration: the
       create fails or silently merges into the wrong object. Resolve (rename / merge / drop) before
-      migrating. Any Danger group makes the tool exit non-zero. Covers project-name and team-slug collisions.</div>
+      migrating. Any Danger group makes the tool exit non-zero. Covers project collisions (names that map
+      to the same derived slug) and team-slug collisions.</div>
     <div class="legitem"><span class="badge info">INFO</span>Won't block the migration, but a human should
-      review it. Covers team-name collisions (watch for different rosters), project-slug collisions, and
-      similar org names.</div>
+      review it. Covers team-name collisions (watch for different rosters) and similar org names.</div>
   </div>
 
   <div class="cards">{org_cards}</div>
 
-  {_html_project_section("Project name collisions (Danger - derived slug will clash)", "danger", report["project_name_collisions_HARD"])}
+  {_html_project_section("Project collisions (Danger - names map to the same derived slug)", "danger", report["project_collisions_HARD"])}
   {_html_team_section("Team slug collisions (Danger - slug must be unique)", "danger", report["team_slug_collisions_HARD"])}
   {_html_team_section("Team name collisions (Info - watch roster diffs)", "info", report["team_name_collisions_info"])}
-  {_html_project_section("Project slug collisions (Info - slug not sent on create)", "info", report["project_slug_collisions_info"])}
   {similar_html}
 </body></html>
 """
@@ -400,15 +418,14 @@ def main():
         logger.info(f"Loaded {path}: org '{org['display']}' "
                     f"({len(org['teams'])} teams, {len(org['projects'])} projects)")
 
-    proj_name_dups, proj_slug_dups = project_collisions(orgs)
+    proj_dups = project_collisions(orgs)
     team_slug_dups = team_collisions_with_membership(orgs, "slug")
     team_name_dups = team_collisions_with_membership(orgs, "name")
     similar = similar_org_names(orgs, args.similarity)
 
-    _print_project_section("PROJECT NAME collisions (DANGER - derived slug will clash)", proj_name_dups, "DANGER")
+    _print_project_section("PROJECT collisions (DANGER - names map to the same derived slug)", proj_dups, "DANGER")
     _print_team_section("TEAM SLUG collisions (DANGER - slug must be unique)", team_slug_dups, "DANGER")
     _print_team_section("TEAM NAME collisions (INFO - watch roster diffs)", team_name_dups, "info")
-    _print_project_section("PROJECT SLUG collisions (INFO - slug not sent on create)", proj_slug_dups, "info")
 
     logger.info("\n=== SIMILAR ORG NAMES (informational) ===")
     if similar:
@@ -418,26 +435,25 @@ def main():
         logger.info("  none above threshold")
 
     def _proj_json(dups):
-        return {k: [{"org": o, "slug": p["slug"], "name": p["name"]} for o, p in g] for k, g in dups.items()}
+        return {k: [{"org": o, "slug": p["slug"], "name": p["name"], "derived_slug": p["derived"]}
+                    for o, p in g] for k, g in dups.items()}
 
     report = {
         "orgs": [{"display": o["display"], "slug": o["slug"], "name": o["name"],
                   "source_file": o["source_file"], "teams": len(o["teams"]),
                   "projects": len(o["projects"])} for o in orgs],
-        "project_name_collisions_HARD": _proj_json(proj_name_dups),
+        "project_collisions_HARD": _proj_json(proj_dups),
         "team_slug_collisions_HARD": team_slug_dups,
         "team_name_collisions_info": team_name_dups,
-        "project_slug_collisions_info": _proj_json(proj_slug_dups),
         "similar_org_names": similar,
     }
-    hard = len(proj_name_dups) + len(team_slug_dups)
+    hard = len(proj_dups) + len(team_slug_dups)
     report["summary"] = {
         "orgs": len(orgs),
         "hard_collisions": hard,
-        "project_name_collisions": len(proj_name_dups),
+        "project_collisions": len(proj_dups),
         "team_slug_collisions": len(team_slug_dups),
         "team_name_collisions": len(team_name_dups),
-        "project_slug_collisions": len(proj_slug_dups),
         "similar_org_name_pairs": len(similar),
     }
 
@@ -450,9 +466,8 @@ def main():
 
     logger.info("\n" + "=" * 64)
     logger.info(f"Summary: {len(orgs)} orgs | Danger collisions: {hard} "
-                f"(project-name {len(proj_name_dups)}, team-slug {len(team_slug_dups)}) | "
-                f"info: team-name {len(team_name_dups)}, project-slug {len(proj_slug_dups)}, "
-                f"similar-names {len(similar)}")
+                f"(project {len(proj_dups)}, team-slug {len(team_slug_dups)}) | "
+                f"info: team-name {len(team_name_dups)}, similar-names {len(similar)}")
     logger.info(f"Wrote {args.out}")
     if args.html:
         logger.info(f"Wrote {args.html}")

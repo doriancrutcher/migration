@@ -149,8 +149,13 @@ type (see `ROADMAP.md`).
   (inline CSS, no server/dependencies, opens offline) with severity-colored sections, org cards, and the
   per-team membership diff. HTML output is gitignored; JSON output/exit codes are unchanged.
 - `duplicates_report.py`: renamed the human-facing severity label **`HARD` -> `Danger`** (with `Info`) in
-  the HTML and console output, and added a **severity reference legend** to the HTML report. JSON keys are
-  unchanged (still `*_HARD` / `hard_collisions`) to keep the machine schema stable.
+  the HTML and console output, and added a **severity reference legend** to the HTML report. The roster-diff
+  badge is neutral gray (red stays exclusive to Danger, amber to Info).
+- `duplicates_report.py`: project collision detection now works on the **derived slug** (`slugify(name)`),
+  which is what SaaS generates on create -- merging the former separate "project name" (Danger) and
+  "project slug" (info) checks into one accurate Danger check that also catches different names that
+  slugify to the same value. Removed the redundant source-slug section. JSON key is now
+  `project_collisions_HARD` (each entry carries `derived_slug`); summary uses `project_collisions`.
 
 ### Removed
 
