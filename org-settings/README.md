@@ -11,15 +11,20 @@ so it needs both a SaaS token and a self-hosted read token.
 ## Run
 
 ```bash
-python3 org-settings/migrate_org_settings.py <saas_token> <dest_org> \
-    --source-token <selfhosted_read_token> \
-    [--source-org migration-test-org] \
-    [--source-url http://127.0.0.1:9000/api/0] \
+python3 org-settings/migrate_org_settings.py "$SAAS_TOKEN" "$ORG" \
+    --source-token "$SH_TOKEN" \
+    --source-org "$SRC_ORG" \
+    --source-url "$SRC_URL" \
     [--saas-url https://sentry.io/api/0] \
     [--dry-run]
 ```
 
 Always run `--dry-run` first (logs the intended `PUT` without sending it).
+
+**`--source-url` matters:** it defaults to the local `http://127.0.0.1:9000/api/0`. For any non-local
+self-hosted instance (dedicated host / VM), set it to that instance's API base, e.g.
+`--source-url https://sentry.your-instance.example/api/0`. The `--source-token` is a read token minted
+**on that self-hosted instance**, and the machine running this must be able to reach `--source-url`.
 
 ## Scope (whitelist)
 

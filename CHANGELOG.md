@@ -89,6 +89,16 @@ previously raised `AttributeError` on non-HTTP exceptions and masked the real er
 Repo restructured around a `main` trunk with one `feat/<data-type>` branch + PR per remaining data
 type (see `ROADMAP.md`).
 
+### Docs
+
+- `README.md`: turned the master runbook into a full command-level guide -- a "set once" env-var block,
+  the exact dry-run/live command for every script in order (Step 0 export -> Step 1 duplicates -> Step 2
+  prereqs -> Step 3 core -> Step 4 settings), and a multi-org-merge "repeat per source org" note.
+- Documented **hosting-agnostic** operation: Step 0 export shown three ways (host CLI / local Docker /
+  provider hand-off), and the settings steps take `--source-url "$SRC_URL"` to target any self-hosted
+  instance (not just local Docker), with the read token minted on that instance. The three settings folder
+  READMEs now call out `--source-url` and reachability explicitly.
+
 ### Added (feat/org-settings)
 
 - `selfhosted_source.py` (new): read-only live client for the self-hosted Sentry API (auth header,
