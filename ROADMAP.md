@@ -30,7 +30,7 @@ The toolkit is organized into per-tool subfolders, each with its own run-guide `
 
 ```
 migration/
-  README.md ROADMAP.md DECISIONS.md CHANGELOG.md requirements.txt
+  README.md ROADMAP.md DECISIONS.md CHANGELOG.md SOURCING.md
   common/            selfhosted_source.py            (shared read-only self-hosted API client)
   preflight/         duplicates_report.py            (step 0: cross-org collision report)
   core/              create_sentry_projects.py create_sentry_teams.py

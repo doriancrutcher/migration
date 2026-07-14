@@ -91,6 +91,13 @@ type (see `ROADMAP.md`).
 
 ### Docs
 
+- Renamed the destination-org env var `ORG` -> `DEST_ORG` across the README and settings-folder READMEs, to
+  read clearly alongside `SRC_ORG` (source) in a merge.
+- `SOURCING.md` **(new).** Explains that the export and the live self-hosted API are used in **separate
+  steps** (pre-flight/core = export; settings = live API), with a per-step source table, and documents how
+  to produce the export on managed/dedicated hosting (Step 0 variant c).
+- Removed `requirements.txt`; the sole dependency is now installed inline (`pip install "requests>=2.31.0"`)
+  in the README and each tool's folder README.
 - `README.md`: turned the master runbook into a full command-level guide -- a "set once" env-var block,
   the exact dry-run/live command for every script in order (Step 0 export -> Step 1 duplicates -> Step 2
   prereqs -> Step 3 core -> Step 4 settings), and a multi-org-merge "repeat per source org" note.

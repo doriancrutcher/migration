@@ -12,6 +12,7 @@ folders.
 - **Roadmap, milestones, branch model:** [ROADMAP.md](ROADMAP.md)
 - **Changelog (vs. upstream):** [CHANGELOG.md](CHANGELOG.md)
 - **Scope decisions log (deferrals to revisit):** [DECISIONS.md](DECISIONS.md)
+- **Data sources (export vs. live API) + producing the export:** [SOURCING.md](SOURCING.md)
 
 ## How the data flows
 
@@ -28,12 +29,17 @@ self-hosted --(export)-->  export.json  --.
 self-hosted --(read API)-> live settings -'
 ```
 
+The two sources are used in **separate steps and never mixed**: pre-flight (Step 1) and core (Step 3) are
+100% export-driven and never touch the live self-hosted API; settings (Step 4) are 100% live-API-driven and
+never read the export. See [SOURCING.md](SOURCING.md) for a step-by-step breakdown of which step uses which
+source, and for how to produce the export on managed/dedicated hosting.
+
 ## Set these once (referenced by every command below)
 
 ```bash
 export SAAS_TOKEN=...          # SaaS internal-integration token
 export SH_TOKEN=...            # self-hosted read token (settings steps only)
-export ORG=my-saas-org         # destination SaaS org slug
+export DEST_ORG=my-saas-org    # destination SaaS org slug
 export SRC_ORG=migration-test-org                        # self-hosted source org slug
 export SRC_URL=https://sentry.your-instance.example/api/0   # live self-hosted API base (settings steps)
 export EXPORT=export.json       # path to the export for the org currently being migrated
@@ -72,6 +78,7 @@ docker compose run --rm -T -v "$PWD:/export" \
   web export organizations /export/export.json --filter-org-slugs "$SRC_ORG" --no-prompt
 
 # c) managed/dedicated hosting: have the provider/admin run the relocation export and hand you the JSON
+#    (see SOURCING.md for exactly what the provider needs to run and how to receive the file)
 ```
 
 For a multi-org merge, run Step 0 once per source org (`--filter-org-slugs <slug>`) to get `org1.json`,
@@ -89,12 +96,14 @@ python3 preflight/duplicates_report.py org1.json org2.json org3.json --html
 
 ### Step 2 — Destination prerequisites (before any write)
 
+Install the one dependency (`requests`) used by the core and settings tools (`preflight/` needs nothing):
+
 ```bash
-pip install -r requirements.txt
+pip install "requests>=2.31.0"
 ```
 
 Then, in SaaS: confirm the destination org exists, and create a **team whose slug is exactly `migration`**
-(every project is created under it in Step 3a). Make sure `SAAS_TOKEN`, `SH_TOKEN`, `ORG`, `SRC_ORG`, and
+(every project is created under it in Step 3a). Make sure `SAAS_TOKEN`, `SH_TOKEN`, `DEST_ORG`, `SRC_ORG`, and
 `SRC_URL` are exported (above).
 
 ### Step 3 — Core content (projects → teams → members → membership → alerts)
@@ -103,40 +112,40 @@ Order is fixed by mapping-file dependencies. Dry-run each first.
 
 ```bash
 # 3a. Projects  -> project_management_results.json
-python3 core/create_sentry_projects.py "$SAAS_TOKEN" "$ORG" "$EXPORT"
+python3 core/create_sentry_projects.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT"
 
 # 3b. Teams (+ attach to projects)  -> project_team_sync_results.json
-python3 core/create_sentry_teams.py "$SAAS_TOKEN" "$ORG" "$EXPORT"
+python3 core/create_sentry_teams.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT"
 
 # 3c. Members  -> user_mappings_for_teams.json, member_id_mappings.json
-python3 core/add_sentry_members.py "$SAAS_TOKEN" "$ORG" --export-file "$EXPORT"
+python3 core/add_sentry_members.py "$SAAS_TOKEN" "$DEST_ORG" --export-file "$EXPORT"
 
 # 3d. Team membership  -> team_member_assignments.json
-python3 core/assign_team_members.py "$SAAS_TOKEN" "$ORG" "$EXPORT" user_mappings_for_teams.json
+python3 core/assign_team_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" user_mappings_for_teams.json
 
 # 3e. Metric alerts  -> alert_rule_migration_results_<ts>.json
-python3 core/migrate_alert_rules.py "$SAAS_TOKEN" "$ORG" "$EXPORT" project_team_sync_results.json
+python3 core/migrate_alert_rules.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" project_team_sync_results.json
 ```
 
 ### Step 4 — Settings (live-API sourced; `--source-url` points at the self-hosted instance)
 
 ```bash
 # 4a. Org governance + privacy  -> org_settings_migration_results.json
-python3 org-settings/migrate_org_settings.py "$SAAS_TOKEN" "$ORG" \
+python3 org-settings/migrate_org_settings.py "$SAAS_TOKEN" "$DEST_ORG" \
   --source-token "$SH_TOKEN" --source-org "$SRC_ORG" --source-url "$SRC_URL"
 
 # 4b. Per-project general settings  -> project_settings_migration_results.json
-python3 project-settings/migrate_project_settings.py "$SAAS_TOKEN" "$ORG" \
+python3 project-settings/migrate_project_settings.py "$SAAS_TOKEN" "$DEST_ORG" \
   --source-token "$SH_TOKEN" --source-org "$SRC_ORG" --source-url "$SRC_URL"
 
 # 4c. Data scrubbers (org + project)  -> data_scrubbers_migration_results.json
-python3 data-scrubbers/migrate_data_scrubbers.py "$SAAS_TOKEN" "$ORG" \
+python3 data-scrubbers/migrate_data_scrubbers.py "$SAAS_TOKEN" "$DEST_ORG" \
   --source-token "$SH_TOKEN" --source-org "$SRC_ORG" --source-url "$SRC_URL"
 ```
 
 ### Multi-org merge
 
-For N source orgs merging into one SaaS `$ORG`: run Step 1 once across all exports, then repeat Steps 3–4
+For N source orgs merging into one SaaS `$DEST_ORG`: run Step 1 once across all exports, then repeat Steps 3–4
 once per source org — set `EXPORT` to that org's export and `SRC_ORG`/`SRC_URL` to that instance each time.
 
 Why the order is fixed (hard dependencies): a SaaS team slugged `migration` must exist before **3a**; **3b**
@@ -152,7 +161,7 @@ Shared code lives in [`common/`](common/) (the read-only self-hosted API client 
 - `core/` and the settings tools — `requests`:
 
 ```bash
-pip install -r requirements.txt
+pip install "requests>=2.31.0"
 ```
 
 ## Known limitations (carried, flagged for review)

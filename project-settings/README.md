@@ -3,7 +3,7 @@
 `migrate_project_settings.py` — migrates whitelisted **per-project general settings** from a live self-hosted
 org to a SaaS org. Live-API-driven (uses [`../common/selfhosted_source.py`](../common/selfhosted_source.py)).
 
-- **Dependencies:** `requests` (`pip install -r ../requirements.txt`).
+- **Dependencies:** `requests` (`pip install "requests>=2.31.0"`).
 - **SaaS scope:** `project:write`. **Self-hosted scope:** `project:read`.
 - **Project matching:** by **name** (case-insensitive). Core migration reassigns slugs on create but preserves
   names, so name is the stable key. Assumes a greenfield destination.
@@ -12,7 +12,7 @@ org to a SaaS org. Live-API-driven (uses [`../common/selfhosted_source.py`](../c
 ## Run
 
 ```bash
-python3 project-settings/migrate_project_settings.py "$SAAS_TOKEN" "$ORG" \
+python3 project-settings/migrate_project_settings.py "$SAAS_TOKEN" "$DEST_ORG" \
     --source-token "$SH_TOKEN" \
     --source-org "$SRC_ORG" \
     --source-url "$SRC_URL" \

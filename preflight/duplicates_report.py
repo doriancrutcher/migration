@@ -227,7 +227,7 @@ def _html_project_section(title, note_class, dups):
     )
 
 
-def _html_team_section(title, note_class, collisions):
+def _html_team_section(title, note_class, collisions, key_noun="team"):
     if not collisions:
         return f'<section><h2>{esc(title)}</h2><p class="empty">none</p></section>'
     blocks = []
@@ -245,14 +245,15 @@ def _html_team_section(title, note_class, collisions):
             members = ", ".join(esc(x) for x in m["members"]) or "(none)"
             unique = ", ".join(esc(x) for x in m["unique_to_this_org"]) or "(none)"
             per_org.append(
-                f'<div class="orgroster"><div class="org">{esc(org_display)}</div>'
+                f'<div class="orgroster"><div class="org"><span class="mlabel">organization:</span> {esc(org_display)}</div>'
                 f'<div class="mline"><span class="mlabel">members:</span> {members}</div>'
                 f'<div class="mline"><span class="mlabel">unique to this org:</span> '
                 f'<span class="unique">{unique}</span></div></div>'
             )
         blocks.append(
             f'<div class="teamblock">'
-            f'<div class="teamhead"><code class="key">{esc(info["label"])}</code> '
+            f'<div class="teamhead"><span class="keylabel">duplicate {esc(key_noun)}:</span> '
+            f'<code class="key">{esc(info["label"])}</code> '
             f'<span class="badge {note_class}">{esc(note_class.upper())}</span> {diff_badge} '
             f'<span class="inorgs">in {esc(", ".join(info["orgs"]))}</span></div>'
             f'<div class="common"><span class="mlabel">common members:</span> {common}</div>'
@@ -273,21 +274,6 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
         f'<div class="cardfile"><code>{esc(o["source_file"])}</code></div></div>'
         for o in report["orgs"]
     )
-
-    similar = report["similar_org_names"]
-    if similar:
-        similar_rows = "".join(
-            f'<tr><td>{esc(p["a"])}</td><td>{esc(p["b"])}</td><td>{esc(p["ratio"])}</td></tr>'
-            for p in similar
-        )
-        similar_html = (
-            '<section><h2>Similar org names (informational)</h2>'
-            '<table><thead><tr><th>Org A</th><th>Org B</th><th>Similarity</th></tr></thead>'
-            f'<tbody>{similar_rows}</tbody></table></section>'
-        )
-    else:
-        similar_html = ('<section><h2>Similar org names (informational)</h2>'
-                        '<p class="empty">none above threshold</p></section>')
 
     files = ", ".join(esc(f) for f in exports)
 
@@ -343,6 +329,7 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
   .orgroster {{ background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 8px 10px;
     font-size: 13px; min-width: 220px; flex: 1; }}
   .orgroster .org {{ font-weight: 600; margin-bottom: 4px; }}
+  .keylabel {{ color: #666; font-size: 13px; }}
   .mlabel {{ color: #666; }}
   .unique {{ color: #b3261e; }}
   @media (prefers-color-scheme: dark) {{
@@ -379,16 +366,12 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
       create fails or silently merges into the wrong object. Resolve (rename / merge / drop) before
       migrating. Any Danger group makes the tool exit non-zero. Covers project collisions (names that map
       to the same derived slug) and team-slug collisions.</div>
-    <div class="legitem"><span class="badge info">INFO</span>Won't block the migration, but a human should
-      review it. Covers team-name collisions (watch for different rosters) and similar org names.</div>
   </div>
 
   <div class="cards">{org_cards}</div>
 
   {_html_project_section("Project collisions (Danger - names map to the same derived slug)", "danger", report["project_collisions_HARD"])}
-  {_html_team_section("Team slug collisions (Danger - slug must be unique)", "danger", report["team_slug_collisions_HARD"])}
-  {_html_team_section("Team name collisions (Info - watch roster diffs)", "info", report["team_name_collisions_info"])}
-  {similar_html}
+  {_html_team_section("Team slug collisions (Danger - slug must be unique)", "danger", report["team_slug_collisions_HARD"], "team slug")}
 </body></html>
 """
 

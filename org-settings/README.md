@@ -4,14 +4,14 @@
 self-hosted org to a SaaS org. Live-API-driven (uses [`../common/selfhosted_source.py`](../common/selfhosted_source.py)),
 so it needs both a SaaS token and a self-hosted read token.
 
-- **Dependencies:** `requests` (`pip install -r ../requirements.txt`).
+- **Dependencies:** `requests` (`pip install "requests>=2.31.0"`).
 - **SaaS scope:** `org:write`. **Self-hosted scope:** `org:read`.
 - Post-migration it GETs the SaaS org back and verifies each field. Writes `org_settings_migration_results.json`.
 
 ## Run
 
 ```bash
-python3 org-settings/migrate_org_settings.py "$SAAS_TOKEN" "$ORG" \
+python3 org-settings/migrate_org_settings.py "$SAAS_TOKEN" "$DEST_ORG" \
     --source-token "$SH_TOKEN" \
     --source-org "$SRC_ORG" \
     --source-url "$SRC_URL" \

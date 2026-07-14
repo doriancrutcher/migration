@@ -3,14 +3,14 @@
 `migrate_data_scrubbers.py` — migrates **standard data-scrubbing** settings at both org and project level from
 a live self-hosted org to a SaaS org. Live-API-driven (uses [`../common/selfhosted_source.py`](../common/selfhosted_source.py)).
 
-- **Dependencies:** `requests` (`pip install -r ../requirements.txt`).
+- **Dependencies:** `requests` (`pip install "requests>=2.31.0"`).
 - **SaaS scope:** `org:write` + `project:write`. **Self-hosted scope:** `org:read`, `project:read`.
 - Verifies each field with a SaaS GET-back and writes `data_scrubbers_migration_results.json`.
 
 ## Run
 
 ```bash
-python3 data-scrubbers/migrate_data_scrubbers.py "$SAAS_TOKEN" "$ORG" \
+python3 data-scrubbers/migrate_data_scrubbers.py "$SAAS_TOKEN" "$DEST_ORG" \
     --source-token "$SH_TOKEN" \
     --source-org "$SRC_ORG" \
     --source-url "$SRC_URL" \
