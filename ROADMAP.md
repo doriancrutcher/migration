@@ -24,6 +24,25 @@ flowchart TD
   feat -->|PR| main
 ```
 
+## Repository layout
+
+The toolkit is organized into per-tool subfolders, each with its own run-guide `README.md`:
+
+```
+migration/
+  README.md ROADMAP.md DECISIONS.md CHANGELOG.md requirements.txt
+  common/            selfhosted_source.py            (shared read-only self-hosted API client)
+  preflight/         duplicates_report.py            (step 0: cross-org collision report)
+  core/              create_sentry_projects.py create_sentry_teams.py
+                     add_sentry_members.py assign_team_members.py migrate_alert_rules.py
+  org-settings/      migrate_org_settings.py
+  project-settings/  migrate_project_settings.py
+  data-scrubbers/    migrate_data_scrubbers.py
+```
+
+The three settings tools import `common/selfhosted_source.py` via a small `sys.path` shim so each stays
+runnable directly from the repo root (`python3 org-settings/migrate_org_settings.py ...`).
+
 ## Two data sources
 
 The relocation export (`export organizations`) only carries a subset of models, so there are two sources:

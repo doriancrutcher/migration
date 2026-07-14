@@ -157,8 +157,24 @@ type (see `ROADMAP.md`).
   slugify to the same value. Removed the redundant source-slug section. JSON key is now
   `project_collisions_HARD` (each entry carries `derived_slug`); summary uses `project_collisions`.
 
+### Changed (repo restructure + anonymization)
+
+- **Repository restructured into per-tool subfolders**, each with its own run-guide `README.md`:
+  `common/` (`selfhosted_source.py`), `preflight/` (`duplicates_report.py`), `core/` (the five phase-2
+  scripts), `org-settings/`, `project-settings/`, `data-scrubbers/`. Moved via `git mv` (history preserved).
+- The three settings tools gained a small `sys.path` shim so they import `common/selfhosted_source.py`
+  while staying runnable directly from the repo root.
+- Top-level `README.md` rewritten as a suite index (data-flow, ordered tool table, token/permission notes,
+  dependencies, known limitations) linking into each subfolder's README; `ROADMAP.md` gained a repository
+  layout section.
+- `.gitignore`: consolidated the per-file results rules into `*_migration_results.json` (also covers
+  `member_roles_migration_results.json`, which had held real emails while untracked).
+
 ### Removed
 
 - `check_duplicates.py`: subsumed by `duplicates_report.py`, which covers the same slug/name collisions
   plus team-membership diffs, org-name similarity, and a HARD-vs-informational distinction.
+- `docs/` (setup + migration runbooks) removed from the published repo — the only tracked files that
+  carried a customer name. Reference copies are retained locally under the project's `reports/` folder.
+- Stray no-extension `create_sentry_projects` duplicate (older broken variant).
 
