@@ -313,7 +313,7 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
     letter-spacing: .02em; }}
   .badge.danger {{ background: #fdecea; color: #b3261e; }}
   .badge.info {{ background: #fff4e5; color: #8a5a00; }}
-  .badge.different {{ background: #fdecea; color: #b3261e; }}
+  .badge.different {{ background: #fff4e5; color: #8a5a00; }}
   .badge.same {{ background: #e8f5e9; color: #1e7e34; }}
   .empty {{ color: #1e7e34; font-style: italic; }}
   .teamblock {{ border: 1px solid #e2e2e2; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }}
