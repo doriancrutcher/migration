@@ -4,6 +4,18 @@ A running record of scope/design choices made per feature -- especially things w
 deferred or excluded and may want to revisit. Newest first. Each entry: what was decided, why, and
 what would change it.
 
+## D7 - Duplicates report is export-based (offline) for now; live multi-org reader deferred
+- Feature: `feat/duplicates-report`
+- Decision: the duplicates/collision report reads **JSON export files** (one per self-hosted org) and
+  compares them offline. It does **not** talk to a live self-hosted instance. Scope is names/slugs plus
+  team-membership diffs and similar org names; **no usage/volume stats**.
+- Why: exports are the stable, already-understood input, need no live token or multi-org API access, and
+  are reproducible for tests. Volume/usage signals need the stats API and self-hosted test data has ~0
+  events, so they would be uninformative right now.
+- Revisit if: we want to run the report directly against a running instance (a live multi-org reader via
+  `selfhosted_source.py`) or need usage-based priority ("high-volume = keep", "unused duplicate = drop").
+  Those are follow-ups, not part of this tool's v1.
+
 ## D5 - Data scrubbers: standard fields only, advanced custom-PII deferred
 - Feature: `feat/data-scrubbers`
 - Decision: migrate the **standard** data-scrubbing settings at both org and project level

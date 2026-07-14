@@ -40,7 +40,7 @@ Core scope covered (the delivered P0 minimum):
 | `add_sentry_members.py` | Add org members from the export |
 | `assign_team_members.py` | Assign members to teams |
 | `migrate_alert_rules.py` | Recreate metric alert rules |
-| `check_duplicates.py` | Pre-flight: report team/project slug & name collisions across exports |
+| `duplicates_report.py` | Pre-flight (multi-org): cross-org project/team collisions + team-membership diffs from exports |
 | `selfhosted_source.py` | Read-only live client for the self-hosted API (source for data the export omits) |
 | `migrate_org_settings.py` | Migrate org governance + privacy settings (live self-hosted -> SaaS) |
 | `migrate_project_settings.py` | Migrate per-project general settings (live self-hosted -> SaaS; matches projects by name) |
@@ -57,6 +57,7 @@ without calling the API. Always dry-run first.
 ## Run order (hard dependencies)
 
 ```
+pre. duplicates_report.py         -> (multi-org merges only) resolve cross-org collisions FIRST
 0. [SaaS, manual] create a team whose slug is exactly "migration"
 1. create_sentry_projects.py      -> projects (created UNDER the "migration" team)
 2. create_sentry_teams.py         -> real teams + attach to projects
@@ -125,11 +126,16 @@ Why this order:
   and a default email-to-owner-team action injected (SaaS rejects a trigger with no action).
   Issue alerts (`sentry.rule`) are detected and reported as skipped.
 
-### check_duplicates.py (pre-flight)
-- CLI: `python check_duplicates.py export1.json [export2.json ...]`
-- Offline only (never calls SaaS). Reports **slug** collisions (would break a merged live run) and
-  **name** collisions (informational) across the provided exports; writes `duplicate_report.json` and
-  exits non-zero on slug collisions.
+### duplicates_report.py (pre-flight, multi-org consolidation)
+- CLI: `python duplicates_report.py org1.json org2.json [org3.json ...] [--label PATH=Name] [--similarity 0.6] [--out duplicate_report.json]`
+- Offline only (never calls SaaS); one export file == one org. Use it BEFORE migrating when several
+  self-hosted orgs are being merged into one SaaS org. Reports:
+  - **PROJECT NAME** collisions (HARD - SaaS derives the slug from the name, so same-name projects clash),
+  - **TEAM SLUG** collisions (HARD - slug must be unique),
+  - **TEAM NAME** collisions with a **membership diff** (same team name, different rosters per org),
+  - **PROJECT SLUG** collisions and **similar org names** (informational).
+- Writes `duplicate_report.json` and exits non-zero if any HARD collision is found.
+- Source is exports only (no live instance) for now - see DECISIONS.md D7.
 
 ## Known limitations (carried, flagged for review)
 
@@ -137,7 +143,7 @@ Why this order:
 - **Alert notification actions** are not preserved; migrated rules get a default action only.
 - **Member roles** are flattened to `member` (integration-token invite limitation).
 - **Project slugs / DSNs change** because slug isn't sent on create (SaaS derives it from the name).
-- **Duplicate names across instances** must be resolved before a merged run (`check_duplicates.py`
+- **Duplicate names across instances** must be resolved before a merged run (`duplicates_report.py`
   reports them; the scripts do not auto-rename).
 
 ## SaaS token / permissions

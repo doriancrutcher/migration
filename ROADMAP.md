@@ -50,6 +50,20 @@ Core (done, tagged `v1.0-core`):
 - Teams & membership
 - Alert rules (metric)
 
+Pre-flight (run first, before any migration):
+
+- `feat/duplicates-report` -- **cross-org duplicates / collision report** (DONE). `duplicates_report.py`
+  reads one JSON export per self-hosted org and reports project-name collisions (HARD), team-slug
+  collisions (HARD), team-name collisions with a **membership diff**, and similar org names. Export-based
+  / offline for now (see DECISIONS.md D7). This is the consolidation (export-vs-export) half of the
+  collision-preflight idea below.
+  - Expected real-world scale for the pilot merge: **Dor-Org1 ~20 projects (high volume, top priority)**,
+    **Dor-Org2 ~1000 projects (lower volume, likely unused duplicates)**, Dor-Org3, ... all merging into
+    **one** SaaS org. The report is O(n) (dict/set lookups) so this size is trivial to compute; at ~1000+
+    projects the console listing gets long, so `duplicate_report.json` is the durable/source-of-truth
+    output. A larger-scale test (seed Org2 to hundreds/thousands of projects) is a good follow-up before
+    the real run.
+
 Foundation (do first):
 
 - `feat/selfhosted-source` -- shared live self-hosted reader that later features depend on.
@@ -88,7 +102,8 @@ Hardening (future; needed before brownfield customers):
   org we control). Real customers may migrate into an **existing, in-use** org, where names/slugs can
   collide with objects the customer already relies on. This milestone adds:
   - a `--dry-run` **pre-flight report** per data type ("these already exist in the destination"),
-    generalizing `check_duplicates.py` from export-vs-export to source-vs-live-destination;
+    generalizing `duplicates_report.py` from export-vs-export (already delivered) to
+    source-vs-live-destination;
   - a configurable **per-type policy** (`skip` / `rename` / `merge` / `overwrite` / `fail`);
   - **provenance tracking** so re-runs only touch migration-created objects (safe idempotency);
   - a safe default of report-only / skip for org-level and security settings.

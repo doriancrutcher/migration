@@ -133,3 +133,21 @@ type (see `ROADMAP.md`).
 - `DECISIONS.md` (new): running log of scope/design choices we may revisit (advanced scrubbers deferral,
   project match-by-name/greenfield, `require2FA` skip, member-role flattening, metric-alerts-only).
 
+### Added (feat/duplicates-report)
+
+- `duplicates_report.py` (new): the migration suite's first tool -- a cross-org duplicates / collision
+  report for the multi-org consolidation case (several self-hosted orgs -> one SaaS org). Reads one JSON
+  export per org and reports **project-name** collisions (HARD; SaaS derives the slug from the name),
+  **team-slug** collisions (HARD; slug must be unique), **team-name** collisions with a per-org
+  **membership diff** (same team name, different rosters), plus **project-slug** collisions and
+  **similar org names** (informational). Writes `duplicate_report.json`; exits non-zero on HARD
+  collisions. Offline / export-based only (no live instance) -- see `DECISIONS.md` (D7). Optional
+  `--label PATH=Name` and `--similarity` flags.
+- `DECISIONS.md` (D7): duplicates report is export-based/offline for now; a live multi-org reader and
+  usage/volume-based prioritization are deferred.
+
+### Removed
+
+- `check_duplicates.py`: subsumed by `duplicates_report.py`, which covers the same slug/name collisions
+  plus team-membership diffs, org-name similarity, and a HARD-vs-informational distinction.
+
