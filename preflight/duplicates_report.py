@@ -274,21 +274,6 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
         for o in report["orgs"]
     )
 
-    similar = report["similar_org_names"]
-    if similar:
-        similar_rows = "".join(
-            f'<tr><td>{esc(p["a"])}</td><td>{esc(p["b"])}</td><td>{esc(p["ratio"])}</td></tr>'
-            for p in similar
-        )
-        similar_html = (
-            '<section><h2>Similar org names (informational)</h2>'
-            '<table><thead><tr><th>Org A</th><th>Org B</th><th>Similarity</th></tr></thead>'
-            f'<tbody>{similar_rows}</tbody></table></section>'
-        )
-    else:
-        similar_html = ('<section><h2>Similar org names (informational)</h2>'
-                        '<p class="empty">none above threshold</p></section>')
-
     files = ", ".join(esc(f) for f in exports)
 
     return f"""<!doctype html>
@@ -380,7 +365,7 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
       migrating. Any Danger group makes the tool exit non-zero. Covers project collisions (names that map
       to the same derived slug) and team-slug collisions.</div>
     <div class="legitem"><span class="badge info">INFO</span>Won't block the migration, but a human should
-      review it. Covers team-name collisions (watch for different rosters) and similar org names.</div>
+      review it. Covers team-name collisions (watch for different rosters).</div>
   </div>
 
   <div class="cards">{org_cards}</div>
@@ -388,7 +373,6 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
   {_html_project_section("Project collisions (Danger - names map to the same derived slug)", "danger", report["project_collisions_HARD"])}
   {_html_team_section("Team slug collisions (Danger - slug must be unique)", "danger", report["team_slug_collisions_HARD"])}
   {_html_team_section("Team name collisions (Info - watch roster diffs)", "info", report["team_name_collisions_info"])}
-  {similar_html}
 </body></html>
 """
 
