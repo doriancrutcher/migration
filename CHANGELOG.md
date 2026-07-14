@@ -133,3 +133,48 @@ type (see `ROADMAP.md`).
 - `DECISIONS.md` (new): running log of scope/design choices we may revisit (advanced scrubbers deferral,
   project match-by-name/greenfield, `require2FA` skip, member-role flattening, metric-alerts-only).
 
+### Added (feat/duplicates-report)
+
+- `duplicates_report.py` (new): the migration suite's first tool -- a cross-org duplicates / collision
+  report for the multi-org consolidation case (several self-hosted orgs -> one SaaS org). Reads one JSON
+  export per org and reports **project-name** collisions (HARD; SaaS derives the slug from the name),
+  **team-slug** collisions (HARD; slug must be unique), **team-name** collisions with a per-org
+  **membership diff** (same team name, different rosters), plus **project-slug** collisions and
+  **similar org names** (informational). Writes `duplicate_report.json`; exits non-zero on HARD
+  collisions. Offline / export-based only (no live instance) -- see `DECISIONS.md` (D7). Optional
+  `--label PATH=Name` and `--similarity` flags.
+- `DECISIONS.md` (D7): duplicates report is export-based/offline for now; a live multi-org reader and
+  usage/volume-based prioritization are deferred.
+- `duplicates_report.py`: `--html [PATH]` flag -- also writes a **self-contained** `duplicate_report.html`
+  (inline CSS, no server/dependencies, opens offline) with severity-colored sections, org cards, and the
+  per-team membership diff. HTML output is gitignored; JSON output/exit codes are unchanged.
+- `duplicates_report.py`: renamed the human-facing severity label **`HARD` -> `Danger`** (with `Info`) in
+  the HTML and console output, and added a **severity reference legend** to the HTML report. The roster-diff
+  badge is neutral gray (red stays exclusive to Danger, amber to Info).
+- `duplicates_report.py`: project collision detection now works on the **derived slug** (`slugify(name)`),
+  which is what SaaS generates on create -- merging the former separate "project name" (Danger) and
+  "project slug" (info) checks into one accurate Danger check that also catches different names that
+  slugify to the same value. Removed the redundant source-slug section. JSON key is now
+  `project_collisions_HARD` (each entry carries `derived_slug`); summary uses `project_collisions`.
+
+### Changed (repo restructure + anonymization)
+
+- **Repository restructured into per-tool subfolders**, each with its own run-guide `README.md`:
+  `common/` (`selfhosted_source.py`), `preflight/` (`duplicates_report.py`), `core/` (the five phase-2
+  scripts), `org-settings/`, `project-settings/`, `data-scrubbers/`. Moved via `git mv` (history preserved).
+- The three settings tools gained a small `sys.path` shim so they import `common/selfhosted_source.py`
+  while staying runnable directly from the repo root.
+- Top-level `README.md` rewritten as a suite index (data-flow, ordered tool table, token/permission notes,
+  dependencies, known limitations) linking into each subfolder's README; `ROADMAP.md` gained a repository
+  layout section.
+- `.gitignore`: consolidated the per-file results rules into `*_migration_results.json` (also covers
+  `member_roles_migration_results.json`, which had held real emails while untracked).
+
+### Removed
+
+- `check_duplicates.py`: subsumed by `duplicates_report.py`, which covers the same slug/name collisions
+  plus team-membership diffs, org-name similarity, and a HARD-vs-informational distinction.
+- `docs/` (setup + migration runbooks) removed from the published repo — the only tracked files that
+  carried a customer name. Reference copies are retained locally under the project's `reports/` folder.
+- Stray no-extension `create_sentry_projects` duplicate (older broken variant).
+

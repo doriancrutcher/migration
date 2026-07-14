@@ -24,6 +24,25 @@ flowchart TD
   feat -->|PR| main
 ```
 
+## Repository layout
+
+The toolkit is organized into per-tool subfolders, each with its own run-guide `README.md`:
+
+```
+migration/
+  README.md ROADMAP.md DECISIONS.md CHANGELOG.md requirements.txt
+  common/            selfhosted_source.py            (shared read-only self-hosted API client)
+  preflight/         duplicates_report.py            (step 0: cross-org collision report)
+  core/              create_sentry_projects.py create_sentry_teams.py
+                     add_sentry_members.py assign_team_members.py migrate_alert_rules.py
+  org-settings/      migrate_org_settings.py
+  project-settings/  migrate_project_settings.py
+  data-scrubbers/    migrate_data_scrubbers.py
+```
+
+The three settings tools import `common/selfhosted_source.py` via a small `sys.path` shim so each stays
+runnable directly from the repo root (`python3 org-settings/migrate_org_settings.py ...`).
+
 ## Two data sources
 
 The relocation export (`export organizations`) only carries a subset of models, so there are two sources:
@@ -50,6 +69,20 @@ Core (done, tagged `v1.0-core`):
 - Teams & membership
 - Alert rules (metric)
 
+Pre-flight (run first, before any migration):
+
+- `feat/duplicates-report` -- **cross-org duplicates / collision report** (DONE). `duplicates_report.py`
+  reads one JSON export per self-hosted org and reports project-name collisions (HARD), team-slug
+  collisions (HARD), team-name collisions with a **membership diff**, and similar org names. Export-based
+  / offline for now (see DECISIONS.md D7). This is the consolidation (export-vs-export) half of the
+  collision-preflight idea below.
+  - Expected real-world scale for the pilot merge: **Dor-Org1 ~20 projects (high volume, top priority)**,
+    **Dor-Org2 ~1000 projects (lower volume, likely unused duplicates)**, Dor-Org3, ... all merging into
+    **one** SaaS org. The report is O(n) (dict/set lookups) so this size is trivial to compute; at ~1000+
+    projects the console listing gets long, so `duplicate_report.json` is the durable/source-of-truth
+    output. A larger-scale test (seed Org2 to hundreds/thousands of projects) is a good follow-up before
+    the real run.
+
 Foundation (do first):
 
 - `feat/selfhosted-source` -- shared live self-hosted reader that later features depend on.
@@ -73,14 +106,21 @@ Milestone: content (all live-API sourced; depend on the reader)
 - `feat/repos` -- Repositories (integration-gated)
 - `feat/saved-searches` -- Saved searches (recent/per-user searches are out of scope)
 
-Delivery (build last):
+Delivery model: distinct, separately-run tools (no single auto-orchestrator)
 
-- `feat/wizard` -- a single guided `migrate.py` the customer runs. Prompts for self-hosted URL + read
-  token, source org, SaaS org + write token, dry-run vs live, and a checklist of which data types to
-  migrate; then runs the selected feature modules in dependency order and writes one consolidated
-  results file. Built after the feature modules exist (it only orchestrates them). The per-feature
-  scripts remain independently runnable for debugging. No credentials are ever committed or shipped --
-  the operator supplies both tokens at run time.
+Per supervisor direction (see DECISIONS.md D8), the toolkit ships as **distinct tools the operator runs
+one at a time, in a documented order** -- NOT a single `migrate.py` wizard that chains everything. The
+reason is overwrite safety: a one-button run makes it too easy to fire a step that mutates the
+destination before the operator has reviewed the prior step's output. Each tool:
+
+- does one data type, is independently runnable, and is `--dry-run`-first;
+- writes its own results file the operator reviews before running the next tool;
+- requires the operator to explicitly pass tokens at run time (no credentials committed or shipped).
+
+Instead of a wizard, delivery = a **README run-order / runbook** that lists the tools in sequence
+(pre-flight `duplicates_report.py` -> projects -> teams -> membership -> settings -> scrubbers ->
+alerts -> ...), each an explicit, separate command. A thin optional convenience runner may be
+reconsidered later, but only as opt-in and never as the default path.
 
 Hardening (future; needed before brownfield customers):
 
@@ -88,7 +128,8 @@ Hardening (future; needed before brownfield customers):
   org we control). Real customers may migrate into an **existing, in-use** org, where names/slugs can
   collide with objects the customer already relies on. This milestone adds:
   - a `--dry-run` **pre-flight report** per data type ("these already exist in the destination"),
-    generalizing `check_duplicates.py` from export-vs-export to source-vs-live-destination;
+    generalizing `duplicates_report.py` from export-vs-export (already delivered) to
+    source-vs-live-destination;
   - a configurable **per-type policy** (`skip` / `rename` / `merge` / `overwrite` / `fail`);
   - **provenance tracking** so re-runs only touch migration-created objects (safe idempotency);
   - a safe default of report-only / skip for org-level and security settings.
