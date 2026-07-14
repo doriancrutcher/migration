@@ -1,0 +1,409 @@
+[
+  {
+    "model": "sentry.organization",
+    "pk": 3,
+    "fields": {
+      "name": "Dor-Org2",
+      "slug": "dor-org2",
+      "status": 0,
+      "date_added": "2026-07-14T20:49:06.408Z",
+      "default_role": "member",
+      "is_test": false,
+      "flags": "1"
+    }
+  },
+  {
+    "model": "sentry.team",
+    "pk": 8,
+    "fields": {
+      "organization": 3,
+      "slug": "data",
+      "name": "Data",
+      "status": 0,
+      "idp_provisioned": false,
+      "date_added": "2026-07-14T20:49:06.768Z"
+    }
+  },
+  {
+    "model": "sentry.team",
+    "pk": 17,
+    "fields": {
+      "organization": 3,
+      "slug": "be",
+      "name": "Backend",
+      "status": 0,
+      "idp_provisioned": false,
+      "date_added": "2026-07-14T21:37:02.563Z"
+    }
+  },
+  {
+    "model": "sentry.user",
+    "pk": 14,
+    "fields": {
+      "password": "!ypncYl5pKBoZ5zwPjbreELDLeoX3Iz5MnnMGXUSH",
+      "last_login": null,
+      "username": "sam@example.com",
+      "name": "",
+      "email": "sam@example.com",
+      "email_unique": null,
+      "is_staff": false,
+      "is_active": true,
+      "is_unclaimed": false,
+      "is_superuser": false,
+      "is_managed": false,
+      "is_sentry_app": null,
+      "is_password_expired": false,
+      "last_password_change": null,
+      "flags": "0",
+      "session_nonce": null,
+      "date_joined": "2026-07-14T20:49:08.044Z",
+      "last_active": "2026-07-14T20:49:08.044Z",
+      "avatar_type": 0,
+      "avatar_url": null
+    }
+  },
+  {
+    "model": "sentry.project",
+    "pk": 11,
+    "fields": {
+      "slug": "payments-api",
+      "name": "Payments API",
+      "forced_color": null,
+      "organization": 3,
+      "public": false,
+      "date_added": "2026-07-14T20:49:07.094Z",
+      "status": 0,
+      "first_event": null,
+      "template": null,
+      "external_id": null,
+      "flags": "10",
+      "platform": "node"
+    }
+  },
+  {
+    "model": "sentry.project",
+    "pk": 12,
+    "fields": {
+      "slug": "checkout-service",
+      "name": "Checkout Service",
+      "forced_color": null,
+      "organization": 3,
+      "public": false,
+      "date_added": "2026-07-14T20:49:07.449Z",
+      "status": 0,
+      "first_event": null,
+      "template": null,
+      "external_id": null,
+      "flags": "10",
+      "platform": "python"
+    }
+  },
+  {
+    "model": "sentry.project",
+    "pk": 13,
+    "fields": {
+      "slug": "analytics",
+      "name": "Analytics",
+      "forced_color": null,
+      "organization": 3,
+      "public": false,
+      "date_added": "2026-07-14T20:49:07.862Z",
+      "status": 0,
+      "first_event": null,
+      "template": null,
+      "external_id": null,
+      "flags": "10",
+      "platform": "python"
+    }
+  },
+  {
+    "model": "sentry.project",
+    "pk": 16,
+    "fields": {
+      "slug": "web-dashboard",
+      "name": "Web Dashboard",
+      "forced_color": null,
+      "organization": 3,
+      "public": false,
+      "date_added": "2026-07-14T21:37:02.573Z",
+      "status": 0,
+      "first_event": null,
+      "template": null,
+      "external_id": null,
+      "flags": "10",
+      "platform": "javascript"
+    }
+  },
+  {
+    "model": "sentry.project",
+    "pk": 17,
+    "fields": {
+      "slug": "billing",
+      "name": "Billing",
+      "forced_color": null,
+      "organization": 3,
+      "public": false,
+      "date_added": "2026-07-14T21:37:02.582Z",
+      "status": 0,
+      "first_event": null,
+      "template": null,
+      "external_id": null,
+      "flags": "10",
+      "platform": "python"
+    }
+  },
+  {
+    "model": "sentry.organizationmember",
+    "pk": 14,
+    "fields": {
+      "organization": 3,
+      "user_id": 14,
+      "email": null,
+      "role": "member",
+      "flags": "0",
+      "token": null,
+      "date_added": "2026-07-14T20:49:08.911Z",
+      "token_expires_at": null,
+      "has_global_access": true,
+      "inviter_id": null,
+      "invite_status": 0,
+      "type": 50,
+      "user_is_active": true,
+      "user_email": "sam@example.com"
+    }
+  },
+  {
+    "model": "sentry.email",
+    "pk": 14,
+    "fields": {
+      "email": "sam@example.com",
+      "date_added": "2026-07-14T20:49:08.074Z"
+    }
+  },
+  {
+    "model": "sentry.useremail",
+    "pk": 14,
+    "fields": {
+      "user": 14,
+      "email": "sam@example.com",
+      "validation_hash": "hWHE0B7lYx3NscihAJFjZIhYFb3dKoeH",
+      "date_hash_added": "2026-07-14T20:49:08.069Z",
+      "is_verified": false
+    }
+  },
+  {
+    "model": "sentry.projectteam",
+    "pk": 16,
+    "fields": {
+      "project": 11,
+      "team": 8
+    }
+  },
+  {
+    "model": "sentry.projectteam",
+    "pk": 17,
+    "fields": {
+      "project": 12,
+      "team": 8
+    }
+  },
+  {
+    "model": "sentry.projectteam",
+    "pk": 18,
+    "fields": {
+      "project": 13,
+      "team": 8
+    }
+  },
+  {
+    "model": "sentry.projectteam",
+    "pk": 34,
+    "fields": {
+      "project": 16,
+      "team": 17
+    }
+  },
+  {
+    "model": "sentry.projectteam",
+    "pk": 35,
+    "fields": {
+      "project": 17,
+      "team": 17
+    }
+  },
+  {
+    "model": "sentry.projectoption",
+    "pk": 22,
+    "fields": {
+      "project": 11,
+      "key": "sentry:option-epoch",
+      "value": 13
+    }
+  },
+  {
+    "model": "sentry.projectoption",
+    "pk": 23,
+    "fields": {
+      "project": 12,
+      "key": "sentry:option-epoch",
+      "value": 13
+    }
+  },
+  {
+    "model": "sentry.projectoption",
+    "pk": 24,
+    "fields": {
+      "project": 13,
+      "key": "sentry:option-epoch",
+      "value": 13
+    }
+  },
+  {
+    "model": "sentry.projectoption",
+    "pk": 28,
+    "fields": {
+      "project": 16,
+      "key": "sentry:option-epoch",
+      "value": 13
+    }
+  },
+  {
+    "model": "sentry.projectoption",
+    "pk": 29,
+    "fields": {
+      "project": 17,
+      "key": "sentry:option-epoch",
+      "value": 13
+    }
+  },
+  {
+    "model": "sentry.projectkey",
+    "pk": 11,
+    "fields": {
+      "project": 11,
+      "label": "Default",
+      "public_key": "fc6ef3a6b9df2de9421e75ccc95f6e3d",
+      "secret_key": "c45a850e3fd10634c91235bf43b1765a",
+      "roles": "1",
+      "status": 0,
+      "date_added": "2026-07-14T20:49:07.288Z",
+      "rate_limit_count": null,
+      "rate_limit_window": null,
+      "data": {
+        "dynamicSdkLoaderOptions": {
+          "hasPerformance": true,
+          "hasReplay": true
+        }
+      },
+      "use_case": "user"
+    }
+  },
+  {
+    "model": "sentry.projectkey",
+    "pk": 12,
+    "fields": {
+      "project": 12,
+      "label": "Default",
+      "public_key": "d4ce0e769b286fa399ba858e78e2c7f9",
+      "secret_key": "d9bffaaa5743bee5ecaf33c58ba6d1a7",
+      "roles": "1",
+      "status": 0,
+      "date_added": "2026-07-14T20:49:07.587Z",
+      "rate_limit_count": null,
+      "rate_limit_window": null,
+      "data": {
+        "dynamicSdkLoaderOptions": {
+          "hasPerformance": true,
+          "hasReplay": true
+        }
+      },
+      "use_case": "user"
+    }
+  },
+  {
+    "model": "sentry.projectkey",
+    "pk": 13,
+    "fields": {
+      "project": 13,
+      "label": "Default",
+      "public_key": "24efa9dd3b40edefd50230c986e7e7a6",
+      "secret_key": "cb3b13bc863fe659bafc5bf8b4aad5f5",
+      "roles": "1",
+      "status": 0,
+      "date_added": "2026-07-14T20:49:07.944Z",
+      "rate_limit_count": null,
+      "rate_limit_window": null,
+      "data": {
+        "dynamicSdkLoaderOptions": {
+          "hasPerformance": true,
+          "hasReplay": true
+        }
+      },
+      "use_case": "user"
+    }
+  },
+  {
+    "model": "sentry.projectkey",
+    "pk": 16,
+    "fields": {
+      "project": 16,
+      "label": "Default",
+      "public_key": "8aeafa0e87f90dbf9221b2ec7bc85032",
+      "secret_key": "daa28171758f50da6cc13fd57e4698d3",
+      "roles": "1",
+      "status": 0,
+      "date_added": "2026-07-14T21:37:02.576Z",
+      "rate_limit_count": null,
+      "rate_limit_window": null,
+      "data": {
+        "dynamicSdkLoaderOptions": {
+          "hasPerformance": true,
+          "hasReplay": true
+        }
+      },
+      "use_case": "user"
+    }
+  },
+  {
+    "model": "sentry.projectkey",
+    "pk": 17,
+    "fields": {
+      "project": 17,
+      "label": "Default",
+      "public_key": "8ef1d1f5632dee70dc5b2b299a209a1d",
+      "secret_key": "c2d6748e8928dfd17e2374a15f129972",
+      "roles": "1",
+      "status": 0,
+      "date_added": "2026-07-14T21:37:02.586Z",
+      "rate_limit_count": null,
+      "rate_limit_window": null,
+      "data": {
+        "dynamicSdkLoaderOptions": {
+          "hasPerformance": true,
+          "hasReplay": true
+        }
+      },
+      "use_case": "user"
+    }
+  },
+  {
+    "model": "sentry.organizationmemberteam",
+    "pk": 20,
+    "fields": {
+      "team": 8,
+      "organizationmember": 14,
+      "is_active": true,
+      "role": null
+    }
+  },
+  {
+    "model": "sentry.organizationmemberteam",
+    "pk": 34,
+    "fields": {
+      "team": 17,
+      "organizationmember": 14,
+      "is_active": true,
+      "role": null
+    }
+  }
+]

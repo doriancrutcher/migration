@@ -1,0 +1,432 @@
+{
+  "orgs": [
+    {
+      "display": "dor-org1",
+      "slug": "dor-org1",
+      "name": "Dor-Org1",
+      "source_file": "dor-org1.json",
+      "teams": 6,
+      "projects": 4
+    },
+    {
+      "display": "dor-org2",
+      "slug": "dor-org2",
+      "name": "Dor-Org2",
+      "source_file": "dor-org2.json",
+      "teams": 2,
+      "projects": 5
+    },
+    {
+      "display": "dor-org3",
+      "slug": "dor-org3",
+      "name": "Dor-Org3",
+      "source_file": "dor-org3.json",
+      "teams": 5,
+      "projects": 2
+    }
+  ],
+  "project_collisions_HARD": {
+    "payments-api": [
+      {
+        "org": "dor-org1",
+        "slug": "payments-api",
+        "name": "Payments API",
+        "derived_slug": "payments-api"
+      },
+      {
+        "org": "dor-org2",
+        "slug": "payments-api",
+        "name": "Payments API",
+        "derived_slug": "payments-api"
+      },
+      {
+        "org": "dor-org3",
+        "slug": "payments-api",
+        "name": "Payments API",
+        "derived_slug": "payments-api"
+      }
+    ],
+    "checkout-service": [
+      {
+        "org": "dor-org1",
+        "slug": "checkout-service",
+        "name": "Checkout Service",
+        "derived_slug": "checkout-service"
+      },
+      {
+        "org": "dor-org2",
+        "slug": "checkout-service",
+        "name": "Checkout Service",
+        "derived_slug": "checkout-service"
+      }
+    ],
+    "web-dashboard": [
+      {
+        "org": "dor-org1",
+        "slug": "web-dashboard",
+        "name": "Web Dashboard",
+        "derived_slug": "web-dashboard"
+      },
+      {
+        "org": "dor-org2",
+        "slug": "web-dashboard",
+        "name": "Web Dashboard",
+        "derived_slug": "web-dashboard"
+      }
+    ]
+  },
+  "team_slug_collisions_HARD": {
+    "fe": {
+      "label": "fe",
+      "orgs": [
+        "dor-org1",
+        "dor-org3"
+      ],
+      "common_members": [
+        "shared@example.com"
+      ],
+      "membership": {
+        "dor-org1": {
+          "members": [
+            "daniel@example.com",
+            "derek@example.com",
+            "dorian@example.com",
+            "shared@example.com"
+          ],
+          "unique_to_this_org": [
+            "daniel@example.com",
+            "derek@example.com",
+            "dorian@example.com"
+          ]
+        },
+        "dor-org3": {
+          "members": [
+            "mandy@example.com",
+            "mikey@example.com",
+            "mitch@example.com",
+            "shared@example.com"
+          ],
+          "unique_to_this_org": [
+            "mandy@example.com",
+            "mikey@example.com",
+            "mitch@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    },
+    "be": {
+      "label": "be",
+      "orgs": [
+        "dor-org1",
+        "dor-org2"
+      ],
+      "common_members": [],
+      "membership": {
+        "dor-org1": {
+          "members": [
+            "dorian@example.com"
+          ],
+          "unique_to_this_org": [
+            "dorian@example.com"
+          ]
+        },
+        "dor-org2": {
+          "members": [
+            "sam@example.com"
+          ],
+          "unique_to_this_org": [
+            "sam@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    },
+    "qa": {
+      "label": "qa",
+      "orgs": [
+        "dor-org1",
+        "dor-org3"
+      ],
+      "common_members": [],
+      "membership": {
+        "dor-org1": {
+          "members": [
+            "derek@example.com"
+          ],
+          "unique_to_this_org": [
+            "derek@example.com"
+          ]
+        },
+        "dor-org3": {
+          "members": [
+            "mandy@example.com"
+          ],
+          "unique_to_this_org": [
+            "mandy@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    },
+    "design": {
+      "label": "design",
+      "orgs": [
+        "dor-org1",
+        "dor-org3"
+      ],
+      "common_members": [],
+      "membership": {
+        "dor-org1": {
+          "members": [
+            "daniel@example.com"
+          ],
+          "unique_to_this_org": [
+            "daniel@example.com"
+          ]
+        },
+        "dor-org3": {
+          "members": [
+            "mitch@example.com"
+          ],
+          "unique_to_this_org": [
+            "mitch@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    },
+    "data": {
+      "label": "data",
+      "orgs": [
+        "dor-org2",
+        "dor-org3"
+      ],
+      "common_members": [],
+      "membership": {
+        "dor-org2": {
+          "members": [
+            "sam@example.com"
+          ],
+          "unique_to_this_org": [
+            "sam@example.com"
+          ]
+        },
+        "dor-org3": {
+          "members": [
+            "mandy@example.com"
+          ],
+          "unique_to_this_org": [
+            "mandy@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    }
+  },
+  "team_name_collisions_info": {
+    "frontend": {
+      "label": "Frontend",
+      "orgs": [
+        "dor-org1",
+        "dor-org3"
+      ],
+      "common_members": [
+        "shared@example.com"
+      ],
+      "membership": {
+        "dor-org1": {
+          "members": [
+            "daniel@example.com",
+            "derek@example.com",
+            "dorian@example.com",
+            "shared@example.com"
+          ],
+          "unique_to_this_org": [
+            "daniel@example.com",
+            "derek@example.com",
+            "dorian@example.com"
+          ]
+        },
+        "dor-org3": {
+          "members": [
+            "mandy@example.com",
+            "mikey@example.com",
+            "mitch@example.com",
+            "shared@example.com"
+          ],
+          "unique_to_this_org": [
+            "mandy@example.com",
+            "mikey@example.com",
+            "mitch@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    },
+    "backend": {
+      "label": "Backend",
+      "orgs": [
+        "dor-org1",
+        "dor-org2"
+      ],
+      "common_members": [],
+      "membership": {
+        "dor-org1": {
+          "members": [
+            "dorian@example.com"
+          ],
+          "unique_to_this_org": [
+            "dorian@example.com"
+          ]
+        },
+        "dor-org2": {
+          "members": [
+            "sam@example.com"
+          ],
+          "unique_to_this_org": [
+            "sam@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    },
+    "qa": {
+      "label": "QA",
+      "orgs": [
+        "dor-org1",
+        "dor-org3"
+      ],
+      "common_members": [],
+      "membership": {
+        "dor-org1": {
+          "members": [
+            "derek@example.com"
+          ],
+          "unique_to_this_org": [
+            "derek@example.com"
+          ]
+        },
+        "dor-org3": {
+          "members": [
+            "mandy@example.com"
+          ],
+          "unique_to_this_org": [
+            "mandy@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    },
+    "platform": {
+      "label": "Platform",
+      "orgs": [
+        "dor-org1",
+        "dor-org3"
+      ],
+      "common_members": [],
+      "membership": {
+        "dor-org1": {
+          "members": [
+            "daniel@example.com",
+            "dorian@example.com"
+          ],
+          "unique_to_this_org": [
+            "daniel@example.com",
+            "dorian@example.com"
+          ]
+        },
+        "dor-org3": {
+          "members": [
+            "mikey@example.com",
+            "mitch@example.com"
+          ],
+          "unique_to_this_org": [
+            "mikey@example.com",
+            "mitch@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    },
+    "design": {
+      "label": "Design",
+      "orgs": [
+        "dor-org1",
+        "dor-org3"
+      ],
+      "common_members": [],
+      "membership": {
+        "dor-org1": {
+          "members": [
+            "daniel@example.com"
+          ],
+          "unique_to_this_org": [
+            "daniel@example.com"
+          ]
+        },
+        "dor-org3": {
+          "members": [
+            "mitch@example.com"
+          ],
+          "unique_to_this_org": [
+            "mitch@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    },
+    "data": {
+      "label": "Data",
+      "orgs": [
+        "dor-org2",
+        "dor-org3"
+      ],
+      "common_members": [],
+      "membership": {
+        "dor-org2": {
+          "members": [
+            "sam@example.com"
+          ],
+          "unique_to_this_org": [
+            "sam@example.com"
+          ]
+        },
+        "dor-org3": {
+          "members": [
+            "mandy@example.com"
+          ],
+          "unique_to_this_org": [
+            "mandy@example.com"
+          ]
+        }
+      },
+      "identical_rosters": false
+    }
+  },
+  "similar_org_names": [
+    {
+      "a": "dor-org1",
+      "b": "dor-org2",
+      "ratio": 0.875
+    },
+    {
+      "a": "dor-org1",
+      "b": "dor-org3",
+      "ratio": 0.875
+    },
+    {
+      "a": "dor-org2",
+      "b": "dor-org3",
+      "ratio": 0.875
+    }
+  ],
+  "summary": {
+    "orgs": 3,
+    "hard_collisions": 8,
+    "project_collisions": 3,
+    "team_slug_collisions": 5,
+    "team_name_collisions": 6,
+    "similar_org_name_pairs": 3
+  }
+}
