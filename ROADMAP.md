@@ -87,14 +87,21 @@ Milestone: content (all live-API sourced; depend on the reader)
 - `feat/repos` -- Repositories (integration-gated)
 - `feat/saved-searches` -- Saved searches (recent/per-user searches are out of scope)
 
-Delivery (build last):
+Delivery model: distinct, separately-run tools (no single auto-orchestrator)
 
-- `feat/wizard` -- a single guided `migrate.py` the customer runs. Prompts for self-hosted URL + read
-  token, source org, SaaS org + write token, dry-run vs live, and a checklist of which data types to
-  migrate; then runs the selected feature modules in dependency order and writes one consolidated
-  results file. Built after the feature modules exist (it only orchestrates them). The per-feature
-  scripts remain independently runnable for debugging. No credentials are ever committed or shipped --
-  the operator supplies both tokens at run time.
+Per supervisor direction (see DECISIONS.md D8), the toolkit ships as **distinct tools the operator runs
+one at a time, in a documented order** -- NOT a single `migrate.py` wizard that chains everything. The
+reason is overwrite safety: a one-button run makes it too easy to fire a step that mutates the
+destination before the operator has reviewed the prior step's output. Each tool:
+
+- does one data type, is independently runnable, and is `--dry-run`-first;
+- writes its own results file the operator reviews before running the next tool;
+- requires the operator to explicitly pass tokens at run time (no credentials committed or shipped).
+
+Instead of a wizard, delivery = a **README run-order / runbook** that lists the tools in sequence
+(pre-flight `duplicates_report.py` -> projects -> teams -> membership -> settings -> scrubbers ->
+alerts -> ...), each an explicit, separate command. A thin optional convenience runner may be
+reconsidered later, but only as opt-in and never as the default path.
 
 Hardening (future; needed before brownfield customers):
 

@@ -4,6 +4,17 @@ A running record of scope/design choices made per feature -- especially things w
 deferred or excluded and may want to revisit. Newest first. Each entry: what was decided, why, and
 what would change it.
 
+## D8 - Ship distinct, separately-run tools; no single orchestrating wizard
+- Feature: delivery model (affects `feat/wizard`, now dropped as the default path)
+- Decision: the toolkit is delivered as **distinct tools the operator runs one at a time, in a
+  documented order**, not a single guided `migrate.py` that chains all steps. Each tool does one data
+  type, is `--dry-run`-first, and writes its own results file to review before the next tool runs.
+- Why: **overwrite safety.** A one-button orchestrator makes it too easy to fire a step that mutates the
+  destination before the operator has reviewed the previous step's output. Separate, explicit commands
+  force a human checkpoint between potentially destructive writes.
+- Revisit if: the customer later wants a convenience runner -- it may be added, but only as an opt-in
+  wrapper over the same tools, never as the default, and still dry-run-first per step.
+
 ## D7 - Duplicates report is export-based (offline) for now; live multi-org reader deferred
 - Feature: `feat/duplicates-report`
 - Decision: the duplicates/collision report reads **JSON export files** (one per self-hosted org) and
