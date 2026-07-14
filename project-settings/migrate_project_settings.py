@@ -28,6 +28,9 @@ import argparse
 import requests
 from datetime import datetime
 
+import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
 from selfhosted_source import SelfHostedSource
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
