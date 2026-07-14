@@ -28,38 +28,123 @@ self-hosted --(export)-->  export.json  --.
 self-hosted --(read API)-> live settings -'
 ```
 
+## Set these once (referenced by every command below)
+
+```bash
+export SAAS_TOKEN=...          # SaaS internal-integration token
+export SH_TOKEN=...            # self-hosted read token (settings steps only)
+export ORG=my-saas-org         # destination SaaS org slug
+export SRC_ORG=migration-test-org                        # self-hosted source org slug
+export SRC_URL=https://sentry.your-instance.example/api/0   # live self-hosted API base (settings steps)
+export EXPORT=export.json       # path to the export for the org currently being migrated
+```
+
+Tokens: create the **SaaS token** as an Internal Integration (Org Settings → Developer Settings → Custom
+Integrations) with scopes `org:write team:write project:admin member:write alerts:write` (member invites also
+require a plan with the invite feature enabled). Create the **self-hosted read token** (`org:read`,
+`project:read`) on the self-hosted instance itself. No credentials are ever committed or shipped.
+
+### Works with any self-hosted hosting (dedicated host, VM, or local Docker)
+
+The tools don't care how the self-hosted instance is hosted — only two touch points vary, both via flags:
+
+- **How you produce the export (Step 0)** depends on your access to the instance (see the three variants below).
+- **The settings steps read the live self-hosted API** at `--source-url "$SRC_URL"` (default is local
+  `http://127.0.0.1:9000/api/0`). They need network reachability to that URL (directly or via VPN, valid TLS)
+  and the `SH_TOKEN` minted on that instance. The pre-flight and core steps need only the export file.
+
 ## Order of operations (run each step, review, then continue)
 
-Run every command from this directory. **Dry-run first**, inspect the output, then re-run for real. After
-each step, review the results file it writes before moving on. Each folder's own `README.md` has the exact
-command, inputs/outputs, and flags.
+Run every command from this directory. **Dry-run first** (append `--dry-run`), inspect the output, then
+re-run the same command without `--dry-run`. After each step, review the results file it writes before moving
+on. Each folder's own `README.md` has the full per-flag detail.
 
-| Step | Folder | Run | Review after |
-|------|--------|-----|--------------|
-| **0. Pre-flight** *(multi-org merges only)* | [`preflight/`](preflight/) | `duplicates_report.py` — cross-org project/team collisions + membership diffs | `duplicate_report.json` (resolve every **Danger** before continuing) |
-| **1a. Projects** | [`core/`](core/) | `create_sentry_projects.py` | `project_management_results.json` |
-| **1b. Teams** | [`core/`](core/) | `create_sentry_teams.py` | `project_team_sync_results.json` |
-| **1c. Members** | [`core/`](core/) | `add_sentry_members.py` | `member_id_mappings.json`, `user_mappings_for_teams.json` |
-| **1d. Team membership** | [`core/`](core/) | `assign_team_members.py` | `team_member_assignments.json` |
-| **1e. Alerts** | [`core/`](core/) | `migrate_alert_rules.py` | `alert_rule_migration_results_<ts>.json` |
-| **2. Org settings** | [`org-settings/`](org-settings/) | `migrate_org_settings.py` | `org_settings_migration_results.json` |
-| **3. Project settings** | [`project-settings/`](project-settings/) | `migrate_project_settings.py` | `project_settings_migration_results.json` |
-| **4. Data scrubbers** | [`data-scrubbers/`](data-scrubbers/) | `migrate_data_scrubbers.py` | `data_scrubbers_migration_results.json` |
+### Step 0 — Produce the self-hosted export (one JSON per source org)
 
-Why the order is fixed (hard dependencies): a SaaS team slugged `migration` must exist before **1a**;
-**1b** attaches teams to already-created projects; **1d** needs the user mappings from **1c**; **1e** maps
-each alert's owner team via the mappings from **1b**. The settings steps (2–4) run after the objects they
-configure exist. See [`core/README.md`](core/) for the full dependency notes.
+Use whichever matches your access; all three produce the same relocation JSON:
+
+```bash
+# a) shell/CLI on the self-hosted host
+sentry export organizations export.json --filter-org-slugs "$SRC_ORG" --no-prompt
+
+# b) local Docker Compose (mount a host dir so the file lands outside the container)
+docker compose run --rm -T -v "$PWD:/export" \
+  web export organizations /export/export.json --filter-org-slugs "$SRC_ORG" --no-prompt
+
+# c) managed/dedicated hosting: have the provider/admin run the relocation export and hand you the JSON
+```
+
+For a multi-org merge, run Step 0 once per source org (`--filter-org-slugs <slug>`) to get `org1.json`,
+`org2.json`, …
+
+### Step 1 — Pre-flight duplicates report (multi-org merges only)
+
+Offline and read-only; never writes to SaaS. Resolve every **Danger** collision (rename/merge/drop) before
+migrating anything.
+
+```bash
+python3 preflight/duplicates_report.py org1.json org2.json org3.json --html
+# review duplicate_report.html / duplicate_report.json
+```
+
+### Step 2 — Destination prerequisites (before any write)
+
+```bash
+pip install -r requirements.txt
+```
+
+Then, in SaaS: confirm the destination org exists, and create a **team whose slug is exactly `migration`**
+(every project is created under it in Step 3a). Make sure `SAAS_TOKEN`, `SH_TOKEN`, `ORG`, `SRC_ORG`, and
+`SRC_URL` are exported (above).
+
+### Step 3 — Core content (projects → teams → members → membership → alerts)
+
+Order is fixed by mapping-file dependencies. Dry-run each first.
+
+```bash
+# 3a. Projects  -> project_management_results.json
+python3 core/create_sentry_projects.py "$SAAS_TOKEN" "$ORG" "$EXPORT"
+
+# 3b. Teams (+ attach to projects)  -> project_team_sync_results.json
+python3 core/create_sentry_teams.py "$SAAS_TOKEN" "$ORG" "$EXPORT"
+
+# 3c. Members  -> user_mappings_for_teams.json, member_id_mappings.json
+python3 core/add_sentry_members.py "$SAAS_TOKEN" "$ORG" --export-file "$EXPORT"
+
+# 3d. Team membership  -> team_member_assignments.json
+python3 core/assign_team_members.py "$SAAS_TOKEN" "$ORG" "$EXPORT" user_mappings_for_teams.json
+
+# 3e. Metric alerts  -> alert_rule_migration_results_<ts>.json
+python3 core/migrate_alert_rules.py "$SAAS_TOKEN" "$ORG" "$EXPORT" project_team_sync_results.json
+```
+
+### Step 4 — Settings (live-API sourced; `--source-url` points at the self-hosted instance)
+
+```bash
+# 4a. Org governance + privacy  -> org_settings_migration_results.json
+python3 org-settings/migrate_org_settings.py "$SAAS_TOKEN" "$ORG" \
+  --source-token "$SH_TOKEN" --source-org "$SRC_ORG" --source-url "$SRC_URL"
+
+# 4b. Per-project general settings  -> project_settings_migration_results.json
+python3 project-settings/migrate_project_settings.py "$SAAS_TOKEN" "$ORG" \
+  --source-token "$SH_TOKEN" --source-org "$SRC_ORG" --source-url "$SRC_URL"
+
+# 4c. Data scrubbers (org + project)  -> data_scrubbers_migration_results.json
+python3 data-scrubbers/migrate_data_scrubbers.py "$SAAS_TOKEN" "$ORG" \
+  --source-token "$SH_TOKEN" --source-org "$SRC_ORG" --source-url "$SRC_URL"
+```
+
+### Multi-org merge
+
+For N source orgs merging into one SaaS `$ORG`: run Step 1 once across all exports, then repeat Steps 3–4
+once per source org — set `EXPORT` to that org's export and `SRC_ORG`/`SRC_URL` to that instance each time.
+
+Why the order is fixed (hard dependencies): a SaaS team slugged `migration` must exist before **3a**; **3b**
+attaches teams to already-created projects; **3d** needs the user mappings from **3c**; **3e** maps each
+alert's owner team via the mappings from **3b**. Settings (Step 4) run after the objects they configure exist.
+See [`core/README.md`](core/) for the full dependency notes.
 
 Shared code lives in [`common/`](common/) (the read-only self-hosted API client used by the settings tools).
-
-## SaaS token / permissions
-
-Create an Internal Integration (Org Settings → Developer Settings → Custom Integrations) and use its token.
-Scopes across the suite: `org:write`, `team:write`, `project:admin`, `member:write`, `alerts:write`. Member
-invites also require a plan with the invite feature enabled (the free Developer plan blocks them). The
-settings tools additionally need a **self-hosted read token** (`org:read`, `project:read`) — passed at run
-time via `--source-token`. No credentials are ever committed or shipped.
 
 ## Dependencies
 
