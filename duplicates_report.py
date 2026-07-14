@@ -290,6 +290,11 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
   .bignum.ok {{ background: #e8f5e9; color: #1e7e34; }}
   .counts {{ font-size: 14px; color: #333; }}
   .counts b {{ font-size: 16px; }}
+  .legend {{ border: 1px solid #e2e2e2; border-radius: 10px; padding: 12px 16px; margin-bottom: 24px; }}
+  .legtitle {{ font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+    color: #666; margin-bottom: 8px; }}
+  .legitem {{ font-size: 13px; margin-bottom: 6px; }}
+  .legitem .badge {{ margin-right: 8px; vertical-align: middle; }}
   .cards {{ display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }}
   .card {{ border: 1px solid #e2e2e2; border-radius: 8px; padding: 12px 14px; min-width: 160px; }}
   .cardname {{ font-weight: 600; }}
@@ -323,7 +328,8 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
   .unique {{ color: #b3261e; }}
   @media (prefers-color-scheme: dark) {{
     body {{ color: #e6e6e6; background: #141414; }}
-    .summary, .card, .teamblock {{ border-color: #333; }}
+    .summary, .card, .teamblock, .legend {{ border-color: #333; }}
+    .legtitle, .legitem {{ color: #9a9a9a; }}
     th {{ background: #1e1e1e; color: #bbb; }}
     th, td {{ border-color: #2a2a2a; }}
     code {{ background: #262626; }}
@@ -340,7 +346,7 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
   <div class="summary">
     <div class="bignum {hard_class}">{hard}</div>
     <div class="counts">
-      <div><b>{hard}</b> HARD collision group(s) &mdash; block a merged migration</div>
+      <div><b>{hard}</b> Danger collision group(s) &mdash; block a merged migration</div>
       <div>project-name {s["project_name_collisions"]} &middot; team-slug {s["team_slug_collisions"]}
         &middot; team-name {s["team_name_collisions"]} (info) &middot;
         project-slug {s["project_slug_collisions"]} (info) &middot;
@@ -348,12 +354,22 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
     </div>
   </div>
 
+  <div class="legend">
+    <div class="legtitle">Severity reference</div>
+    <div class="legitem"><span class="badge danger">DANGER</span>Will break a merged migration: the
+      create fails or silently merges into the wrong object. Resolve (rename / merge / drop) before
+      migrating. Any Danger group makes the tool exit non-zero. Covers project-name and team-slug collisions.</div>
+    <div class="legitem"><span class="badge info">INFO</span>Won't block the migration, but a human should
+      review it. Covers team-name collisions (watch for different rosters), project-slug collisions, and
+      similar org names.</div>
+  </div>
+
   <div class="cards">{org_cards}</div>
 
-  {_html_project_section("Project name collisions (HARD - derived slug will clash)", "danger", report["project_name_collisions_HARD"])}
-  {_html_team_section("Team slug collisions (HARD - slug must be unique)", "danger", report["team_slug_collisions_HARD"])}
-  {_html_team_section("Team name collisions (informational - watch roster diffs)", "info", report["team_name_collisions_info"])}
-  {_html_project_section("Project slug collisions (informational - slug not sent on create)", "info", report["project_slug_collisions_info"])}
+  {_html_project_section("Project name collisions (Danger - derived slug will clash)", "danger", report["project_name_collisions_HARD"])}
+  {_html_team_section("Team slug collisions (Danger - slug must be unique)", "danger", report["team_slug_collisions_HARD"])}
+  {_html_team_section("Team name collisions (Info - watch roster diffs)", "info", report["team_name_collisions_info"])}
+  {_html_project_section("Project slug collisions (Info - slug not sent on create)", "info", report["project_slug_collisions_info"])}
   {similar_html}
 </body></html>
 """
@@ -389,10 +405,10 @@ def main():
     team_name_dups = team_collisions_with_membership(orgs, "name")
     similar = similar_org_names(orgs, args.similarity)
 
-    _print_project_section("PROJECT NAME collisions (HARD - derived slug will clash)", proj_name_dups, "HARD")
-    _print_team_section("TEAM SLUG collisions (HARD - slug must be unique)", team_slug_dups, "HARD")
-    _print_team_section("TEAM NAME collisions (informational - watch roster diffs)", team_name_dups, "info")
-    _print_project_section("PROJECT SLUG collisions (informational - slug not sent on create)", proj_slug_dups, "info")
+    _print_project_section("PROJECT NAME collisions (DANGER - derived slug will clash)", proj_name_dups, "DANGER")
+    _print_team_section("TEAM SLUG collisions (DANGER - slug must be unique)", team_slug_dups, "DANGER")
+    _print_team_section("TEAM NAME collisions (INFO - watch roster diffs)", team_name_dups, "info")
+    _print_project_section("PROJECT SLUG collisions (INFO - slug not sent on create)", proj_slug_dups, "info")
 
     logger.info("\n=== SIMILAR ORG NAMES (informational) ===")
     if similar:
@@ -433,7 +449,7 @@ def main():
             f.write(render_html(report, args.exports, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
     logger.info("\n" + "=" * 64)
-    logger.info(f"Summary: {len(orgs)} orgs | HARD collisions: {hard} "
+    logger.info(f"Summary: {len(orgs)} orgs | Danger collisions: {hard} "
                 f"(project-name {len(proj_name_dups)}, team-slug {len(team_slug_dups)}) | "
                 f"info: team-name {len(team_name_dups)}, project-slug {len(proj_slug_dups)}, "
                 f"similar-names {len(similar)}")
@@ -442,7 +458,7 @@ def main():
         logger.info(f"Wrote {args.html}")
 
     if hard:
-        logger.info(f"\nFOUND {hard} HARD collision group(s) that will break a merged migration. "
+        logger.info(f"\nFOUND {hard} Danger collision group(s) that will break a merged migration. "
                     f"Resolve (rename/merge/drop) before migrating.")
         sys.exit(2)
     logger.info("\nNo hard collisions detected.")

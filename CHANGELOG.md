@@ -148,6 +148,9 @@ type (see `ROADMAP.md`).
 - `duplicates_report.py`: `--html [PATH]` flag -- also writes a **self-contained** `duplicate_report.html`
   (inline CSS, no server/dependencies, opens offline) with severity-colored sections, org cards, and the
   per-team membership diff. HTML output is gitignored; JSON output/exit codes are unchanged.
+- `duplicates_report.py`: renamed the human-facing severity label **`HARD` -> `Danger`** (with `Info`) in
+  the HTML and console output, and added a **severity reference legend** to the HTML report. JSON keys are
+  unchanged (still `*_HARD` / `hard_collisions`) to keep the machine schema stable.
 
 ### Removed
 
