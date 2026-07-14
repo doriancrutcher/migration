@@ -364,15 +364,12 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
       create fails or silently merges into the wrong object. Resolve (rename / merge / drop) before
       migrating. Any Danger group makes the tool exit non-zero. Covers project collisions (names that map
       to the same derived slug) and team-slug collisions.</div>
-    <div class="legitem"><span class="badge info">INFO</span>Won't block the migration, but a human should
-      review it. Covers team-name collisions (watch for different rosters).</div>
   </div>
 
   <div class="cards">{org_cards}</div>
 
   {_html_project_section("Project collisions (Danger - names map to the same derived slug)", "danger", report["project_collisions_HARD"])}
   {_html_team_section("Team slug collisions (Danger - slug must be unique)", "danger", report["team_slug_collisions_HARD"])}
-  {_html_team_section("Team name collisions (Info - watch roster diffs)", "info", report["team_name_collisions_info"])}
 </body></html>
 """
 
