@@ -19,6 +19,7 @@ org_settings_migration_results.json
 project_settings_migration_results.json
 data_scrubbers_migration_results.json
 duplicate_report.json
+duplicate_report.html
 dryrun-out/
 .sh_read_token
 .saas_token

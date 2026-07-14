@@ -127,7 +127,9 @@ Why this order:
   Issue alerts (`sentry.rule`) are detected and reported as skipped.
 
 ### duplicates_report.py (pre-flight, multi-org consolidation)
-- CLI: `python duplicates_report.py org1.json org2.json [org3.json ...] [--label PATH=Name] [--similarity 0.6] [--out duplicate_report.json]`
+- CLI: `python duplicates_report.py org1.json org2.json [org3.json ...] [--label PATH=Name] [--similarity 0.6] [--out duplicate_report.json] [--html [duplicate_report.html]]`
+- `--html` also writes a **self-contained** `duplicate_report.html` (inline CSS, no server or dependencies,
+  opens offline in any browser) - a readable/shareable view of the same report.
 - Offline only (never calls SaaS); one export file == one org. Use it BEFORE migrating when several
   self-hosted orgs are being merged into one SaaS org. Reports:
   - **PROJECT NAME** collisions (HARD - SaaS derives the slug from the name, so same-name projects clash),

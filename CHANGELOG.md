@@ -145,6 +145,9 @@ type (see `ROADMAP.md`).
   `--label PATH=Name` and `--similarity` flags.
 - `DECISIONS.md` (D7): duplicates report is export-based/offline for now; a live multi-org reader and
   usage/volume-based prioritization are deferred.
+- `duplicates_report.py`: `--html [PATH]` flag -- also writes a **self-contained** `duplicate_report.html`
+  (inline CSS, no server/dependencies, opens offline) with severity-colored sections, org cards, and the
+  per-team membership diff. HTML output is gitignored; JSON output/exit codes are unchanged.
 
 ### Removed
 

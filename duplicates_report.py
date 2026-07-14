@@ -18,14 +18,17 @@ What counts as a hard blocker for a merged create (vs. informational):
 
 Usage:
   python duplicates_report.py org1.json org2.json [org3.json ...] [--label PATH=DisplayName ...]
-      [--similarity 0.6] [--out duplicate_report.json]
+      [--similarity 0.6] [--out duplicate_report.json] [--html [duplicate_report.html]]
 
-Writes duplicate_report.json and exits non-zero if any HARD collision is found.
+Writes duplicate_report.json (and, with --html, a self-contained duplicate_report.html) and exits
+non-zero if any HARD collision is found.
 """
 import sys
 import json
+import html as html_lib
 import argparse
 import logging
+from datetime import datetime
 from difflib import SequenceMatcher
 from collections import defaultdict
 
@@ -179,6 +182,183 @@ def _print_team_section(title, collisions, note):
             logger.info(f"      {org_display}: members [{', '.join(m['members']) or '(none)'}] | unique [{uniq}]")
 
 
+def esc(s) -> str:
+    return html_lib.escape(str(s), quote=True)
+
+
+def _html_project_section(title, note_class, dups):
+    if not dups:
+        return f'<section><h2>{esc(title)}</h2><p class="empty">none</p></section>'
+    rows = []
+    for key, group in sorted(dups.items()):
+        orgs = "".join(
+            f'<li><span class="org">{esc(item["org"])}</span> '
+            f'&mdash; slug <code>{esc(item["slug"])}</code>, name &ldquo;{esc(item["name"])}&rdquo;</li>'
+            for item in group
+        )
+        rows.append(
+            f'<tr><td class="key">{esc(key)}</td>'
+            f'<td><span class="badge {note_class}">{esc(note_class.upper())}</span></td>'
+            f'<td><ul class="orglist">{orgs}</ul></td></tr>'
+        )
+    return (
+        f'<section><h2>{esc(title)}</h2>'
+        f'<table><thead><tr><th>Value</th><th>Severity</th><th>Appears in</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></section>'
+    )
+
+
+def _html_team_section(title, note_class, collisions):
+    if not collisions:
+        return f'<section><h2>{esc(title)}</h2><p class="empty">none</p></section>'
+    blocks = []
+    for key, info in sorted(collisions.items()):
+        diff_badge = (
+            '<span class="badge different">DIFFERENT rosters</span>'
+            if not info["identical_rosters"]
+            else '<span class="badge same">identical rosters</span>'
+        )
+        common = (
+            ", ".join(esc(m) for m in info["common_members"]) if info["common_members"] else "(none)"
+        )
+        per_org = []
+        for org_display, m in info["membership"].items():
+            members = ", ".join(esc(x) for x in m["members"]) or "(none)"
+            unique = ", ".join(esc(x) for x in m["unique_to_this_org"]) or "(none)"
+            per_org.append(
+                f'<div class="orgroster"><div class="org">{esc(org_display)}</div>'
+                f'<div class="mline"><span class="mlabel">members:</span> {members}</div>'
+                f'<div class="mline"><span class="mlabel">unique to this org:</span> '
+                f'<span class="unique">{unique}</span></div></div>'
+            )
+        blocks.append(
+            f'<div class="teamblock">'
+            f'<div class="teamhead"><code class="key">{esc(info["label"])}</code> '
+            f'<span class="badge {note_class}">{esc(note_class.upper())}</span> {diff_badge} '
+            f'<span class="inorgs">in {esc(", ".join(info["orgs"]))}</span></div>'
+            f'<div class="common"><span class="mlabel">common members:</span> {common}</div>'
+            f'<div class="rosters">{"".join(per_org)}</div></div>'
+        )
+    return f'<section><h2>{esc(title)}</h2>{"".join(blocks)}</section>'
+
+
+def render_html(report: dict, exports: list, generated_at: str) -> str:
+    s = report["summary"]
+    hard = s["hard_collisions"]
+    hard_class = "danger" if hard else "ok"
+
+    org_cards = "".join(
+        f'<div class="card"><div class="cardname">{esc(o["display"])}</div>'
+        f'<div class="cardsub">{esc(o["name"])}</div>'
+        f'<div class="cardstats">{o["teams"]} teams &middot; {o["projects"]} projects</div>'
+        f'<div class="cardfile"><code>{esc(o["source_file"])}</code></div></div>'
+        for o in report["orgs"]
+    )
+
+    similar = report["similar_org_names"]
+    if similar:
+        similar_rows = "".join(
+            f'<tr><td>{esc(p["a"])}</td><td>{esc(p["b"])}</td><td>{esc(p["ratio"])}</td></tr>'
+            for p in similar
+        )
+        similar_html = (
+            '<section><h2>Similar org names (informational)</h2>'
+            '<table><thead><tr><th>Org A</th><th>Org B</th><th>Similarity</th></tr></thead>'
+            f'<tbody>{similar_rows}</tbody></table></section>'
+        )
+    else:
+        similar_html = ('<section><h2>Similar org names (informational)</h2>'
+                        '<p class="empty">none above threshold</p></section>')
+
+    files = ", ".join(esc(f) for f in exports)
+
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duplicate / collision report</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    max-width: 980px; margin: 0 auto; padding: 24px; line-height: 1.5; color: #1a1a1a; background: #fff; }}
+  h1 {{ margin: 0 0 4px; font-size: 24px; }}
+  .meta {{ color: #666; font-size: 13px; margin-bottom: 20px; }}
+  .meta code {{ font-size: 12px; }}
+  .summary {{ display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+    border: 1px solid #e2e2e2; border-radius: 10px; padding: 16px; margin-bottom: 24px; }}
+  .bignum {{ font-size: 40px; font-weight: 700; line-height: 1; padding: 6px 16px; border-radius: 8px; }}
+  .bignum.danger {{ background: #fdecea; color: #b3261e; }}
+  .bignum.ok {{ background: #e8f5e9; color: #1e7e34; }}
+  .counts {{ font-size: 14px; color: #333; }}
+  .counts b {{ font-size: 16px; }}
+  .cards {{ display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }}
+  .card {{ border: 1px solid #e2e2e2; border-radius: 8px; padding: 12px 14px; min-width: 160px; }}
+  .cardname {{ font-weight: 600; }}
+  .cardsub {{ color: #666; font-size: 13px; }}
+  .cardstats {{ margin-top: 6px; font-size: 13px; }}
+  .cardfile {{ margin-top: 4px; font-size: 11px; color: #888; }}
+  section {{ margin-bottom: 28px; }}
+  h2 {{ font-size: 17px; border-bottom: 2px solid #eee; padding-bottom: 6px; }}
+  table {{ border-collapse: collapse; width: 100%; font-size: 14px; }}
+  th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; }}
+  th {{ color: #555; font-weight: 600; background: #fafafa; }}
+  code {{ background: #f2f2f2; padding: 1px 5px; border-radius: 4px; font-size: 12px; }}
+  .key {{ font-weight: 600; }}
+  .orglist {{ margin: 0; padding-left: 18px; }}
+  .badge {{ display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
+    letter-spacing: .02em; }}
+  .badge.danger {{ background: #fdecea; color: #b3261e; }}
+  .badge.info {{ background: #fff4e5; color: #8a5a00; }}
+  .badge.different {{ background: #fdecea; color: #b3261e; }}
+  .badge.same {{ background: #e8f5e9; color: #1e7e34; }}
+  .empty {{ color: #1e7e34; font-style: italic; }}
+  .teamblock {{ border: 1px solid #e2e2e2; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }}
+  .teamhead {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }}
+  .inorgs {{ color: #666; font-size: 13px; }}
+  .common {{ font-size: 13px; margin-bottom: 8px; }}
+  .rosters {{ display: flex; gap: 12px; flex-wrap: wrap; }}
+  .orgroster {{ background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 8px 10px;
+    font-size: 13px; min-width: 220px; flex: 1; }}
+  .orgroster .org {{ font-weight: 600; margin-bottom: 4px; }}
+  .mlabel {{ color: #666; }}
+  .unique {{ color: #b3261e; }}
+  @media (prefers-color-scheme: dark) {{
+    body {{ color: #e6e6e6; background: #141414; }}
+    .summary, .card, .teamblock {{ border-color: #333; }}
+    th {{ background: #1e1e1e; color: #bbb; }}
+    th, td {{ border-color: #2a2a2a; }}
+    code {{ background: #262626; }}
+    .orgroster {{ background: #1c1c1c; border-color: #2a2a2a; }}
+    h2 {{ border-color: #2a2a2a; }}
+    .cardsub, .cardfile, .inorgs, .mlabel, .counts {{ color: #9a9a9a; }}
+    .unique {{ color: #ff6b5e; }}
+  }}
+</style></head>
+<body>
+  <h1>Duplicate / collision report</h1>
+  <div class="meta">Generated {esc(generated_at)} &middot; sources: <code>{files}</code></div>
+
+  <div class="summary">
+    <div class="bignum {hard_class}">{hard}</div>
+    <div class="counts">
+      <div><b>{hard}</b> HARD collision group(s) &mdash; block a merged migration</div>
+      <div>project-name {s["project_name_collisions"]} &middot; team-slug {s["team_slug_collisions"]}
+        &middot; team-name {s["team_name_collisions"]} (info) &middot;
+        project-slug {s["project_slug_collisions"]} (info) &middot;
+        similar-names {s["similar_org_name_pairs"]} (info)</div>
+    </div>
+  </div>
+
+  <div class="cards">{org_cards}</div>
+
+  {_html_project_section("Project name collisions (HARD - derived slug will clash)", "danger", report["project_name_collisions_HARD"])}
+  {_html_team_section("Team slug collisions (HARD - slug must be unique)", "danger", report["team_slug_collisions_HARD"])}
+  {_html_team_section("Team name collisions (informational - watch roster diffs)", "info", report["team_name_collisions_info"])}
+  {_html_project_section("Project slug collisions (informational - slug not sent on create)", "info", report["project_slug_collisions_info"])}
+  {similar_html}
+</body></html>
+"""
+
+
 def main():
     parser = argparse.ArgumentParser(description="Cross-org duplicates/collision report from JSON exports")
     parser.add_argument("exports", nargs="+", help="One export.json per org")
@@ -187,6 +367,8 @@ def main():
     parser.add_argument("--similarity", type=float, default=0.6,
                         help="Org-name similarity threshold 0..1 for the 'similar names' section (default 0.6)")
     parser.add_argument("--out", default="duplicate_report.json", help="Output JSON path")
+    parser.add_argument("--html", nargs="?", const="duplicate_report.html", default=None, metavar="PATH",
+                        help="Also write a self-contained HTML report (default duplicate_report.html)")
     args = parser.parse_args()
 
     labels = {}
@@ -246,12 +428,18 @@ def main():
     with open(args.out, "w") as f:
         json.dump(report, f, indent=2)
 
+    if args.html:
+        with open(args.html, "w") as f:
+            f.write(render_html(report, args.exports, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
     logger.info("\n" + "=" * 64)
     logger.info(f"Summary: {len(orgs)} orgs | HARD collisions: {hard} "
                 f"(project-name {len(proj_name_dups)}, team-slug {len(team_slug_dups)}) | "
                 f"info: team-name {len(team_name_dups)}, project-slug {len(proj_slug_dups)}, "
                 f"similar-names {len(similar)}")
     logger.info(f"Wrote {args.out}")
+    if args.html:
+        logger.info(f"Wrote {args.html}")
 
     if hard:
         logger.info(f"\nFOUND {hard} HARD collision group(s) that will break a merged migration. "
