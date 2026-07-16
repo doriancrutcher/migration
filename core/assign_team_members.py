@@ -3,6 +3,7 @@ import requests
 import logging
 from typing import Dict, List
 from collections import defaultdict
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,6 +33,26 @@ class SentryTeamMemberManager:
             logger.error(f"Invalid member mappings file: {str(e)}")
             raise
 
+    @staticmethod
+    def resolve_source_org_pk(data: List[Dict], source_org: str = None):
+        """Resolve which SOURCE org's teams to consider. An export may contain many orgs; team
+        records carry an `organization` FK (the source org pk). Returns that pk, or None (no filter)
+        only when the file holds a single org and no --source-org was given."""
+        orgs = {item.get('pk'): (item.get('fields') or {}).get('slug')
+                for item in data if isinstance(item, dict) and item.get('model') == 'sentry.organization'}
+        if source_org:
+            matches = [pk for pk, slug in orgs.items() if slug == source_org]
+            if not matches:
+                raise ValueError(f"--source-org '{source_org}' not found. Orgs in file: {sorted(filter(None, orgs.values()))}")
+            if len(matches) > 1:
+                raise ValueError(f"--source-org '{source_org}' is ambiguous (pks {matches} share this slug)")
+            return matches[0]
+        if len(orgs) > 1:
+            raise ValueError(
+                f"Export contains {len(orgs)} orgs {sorted(filter(None, orgs.values()))}; "
+                f"pass --source-org SLUG to migrate one at a time.")
+        return next(iter(orgs), None)
+
     def add_member_to_team(self, org_slug: str, member_id: str, team_slug: str) -> bool:
         """
         Add a member to a team
@@ -55,9 +76,12 @@ class SentryTeamMemberManager:
                 logger.error(f"Response: {e.response.text}")
             return False
 
-    def sync_team_members(self, export_file_path: str, mappings_file_path: str, org_slug: str) -> Dict:
+    def sync_team_members(self, export_file_path: str, mappings_file_path: str, org_slug: str,
+                          source_org: str = None) -> Dict:
         """
-        Sync team memberships using the member mappings and export data
+        Sync team memberships using the member mappings and export data. When the export holds
+        multiple orgs, `source_org` (a source org slug) restricts which teams are considered;
+        combined with the per-org member mappings file, this scopes assignments to one org.
         """
         results = {
             'successful': [],
@@ -73,17 +97,27 @@ class SentryTeamMemberManager:
 
             # Load export data
             data = self.load_export_data(export_file_path)
-            
-            # Create team pk to slug mapping
+            source_pk = self.resolve_source_org_pk(data, source_org)
+            if source_pk is not None:
+                logger.info(f"Filtering to source org '{source_org or '(only org in file)'}' (pk {source_pk})")
+
+            # Create team pk to slug mapping (scoped to the source org when filtering)
             team_slugs = {}
             for item in data:
+                if not isinstance(item, dict):
+                    continue
                 if item.get('model') == 'sentry.team':
-                    team_slugs[item['pk']] = item.get('fields', {}).get('slug')
+                    fields = item.get('fields', {}) or {}
+                    if source_pk is not None and fields.get('organization') != source_pk:
+                        continue
+                    team_slugs[item['pk']] = fields.get('slug')
 
             # Process organization member team relationships
             for item in data:
+                if not isinstance(item, dict):
+                    continue
                 if item.get('model') == 'sentry.organizationmemberteam':
-                    fields = item.get('fields', {})
+                    fields = item.get('fields', {}) or {}
                     user_pk = str(fields.get('organizationmember'))
                     team_pk = fields.get('team')
                     
@@ -140,9 +174,10 @@ def main():
 
     parser = argparse.ArgumentParser(description='Assign Sentry members to teams')
     parser.add_argument('auth_token', help='Sentry authentication token')
-    parser.add_argument('org_slug', help='Organization slug')
+    parser.add_argument('org_slug', help='Destination SaaS organization slug')
     parser.add_argument('export_file', help='JSON export file path')
     parser.add_argument('mappings_file', help='user_mappings_for_teams.json from add_sentry_members.py')
+    parser.add_argument('--source-org', help='Source org slug to migrate (required when the export holds multiple orgs)')
     parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
     args = parser.parse_args()
 
@@ -155,16 +190,19 @@ def main():
         if args.dry_run:
             logger.info("=== DRY RUN: no changes will be made to SaaS ===")
         manager = SentryTeamMemberManager(auth_token, dry_run=args.dry_run)
-        results = manager.sync_team_members(export_file, mappings_file, org_slug)
+        results = manager.sync_team_members(export_file, mappings_file, org_slug, source_org=args.source_org)
         
         logger.info("Team member sync completed:")
         logger.info(f"Successful assignments: {len(results['successful'])}")
         logger.info(f"Failed assignments: {len(results['failed'])}")
         logger.info(f"Skipped assignments: {len(results['skipped'])}")
-        
-        # Write results to file
-        with open('team_member_assignments.json', 'w') as f:
+
+        # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
+        tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"
+        out = f"team_member_assignments_{tag}.json"
+        with open(out, 'w') as f:
             json.dump(results, f, indent=2)
+        logger.info(f"Wrote {out}")
             
     except Exception as e:
         logger.error(f"Script execution failed: {str(e)}")

@@ -30,14 +30,36 @@ class AlertRuleMigrator:
         with open(export_file, 'r') as f:
             return json.load(f)
 
+    @staticmethod
+    def resolve_source_org_pk(data: List[Dict], source_org: str = None):
+        """Resolve which SOURCE org's rules to migrate. An export may contain many orgs. Alert rules
+        are scoped by project membership (project->organization FK), so this returns the source org
+        pk used to restrict which projects (and therefore which rules) are in scope. Returns None
+        (no filter) only when the file holds a single org and no --source-org was given."""
+        orgs = {i.get('pk'): (i.get('fields') or {}).get('slug')
+                for i in data if isinstance(i, dict) and i.get('model') == 'sentry.organization'}
+        if source_org:
+            matches = [pk for pk, slug in orgs.items() if slug == source_org]
+            if not matches:
+                raise ValueError(f"--source-org '{source_org}' not found. Orgs in file: {sorted(filter(None, orgs.values()))}")
+            if len(matches) > 1:
+                raise ValueError(f"--source-org '{source_org}' is ambiguous (pks {matches} share this slug)")
+            return matches[0]
+        if len(orgs) > 1:
+            raise ValueError(
+                f"Export contains {len(orgs)} orgs {sorted(filter(None, orgs.values()))}; "
+                f"pass --source-org SLUG to migrate one at a time.")
+        return next(iter(orgs), None)
+
     # ---- lookup builders from the export ----
     def build_snuba_index(self, data: List[Dict]) -> Dict[int, Dict]:
-        return {i["pk"]: i.get("fields", {}) for i in data if i.get("model") == "sentry.snubaquery"}
+        return {i["pk"]: i.get("fields", {}) for i in data
+                if isinstance(i, dict) and i.get("model") == "sentry.snubaquery"}
 
     def build_event_types(self, data: List[Dict]) -> Dict[int, List[str]]:
         out: Dict[int, List[str]] = {}
         for i in data:
-            if i.get("model") == "sentry.snubaqueryeventtype":
+            if isinstance(i, dict) and i.get("model") == "sentry.snubaqueryeventtype":
                 f = i.get("fields", {})
                 sq = f.get("snuba_query")
                 et = EVENT_TYPE_MAP.get(f.get("type"))
@@ -45,16 +67,23 @@ class AlertRuleMigrator:
                     out.setdefault(sq, []).append(et)
         return out
 
-    def build_project_slugs(self, data: List[Dict]) -> Dict[int, str]:
-        return {
-            i["pk"]: i.get("fields", {}).get("slug")
-            for i in data if i.get("model") == "sentry.project"
-        }
+    def build_project_slugs(self, data: List[Dict], source_pk=None) -> Dict[int, str]:
+        """Map project pk -> slug. When source_pk is given, only projects owned by that org are
+        included, which is what scopes alert rules to a single source org."""
+        out: Dict[int, str] = {}
+        for i in data:
+            if not isinstance(i, dict) or i.get("model") != "sentry.project":
+                continue
+            f = i.get("fields", {}) or {}
+            if source_pk is not None and f.get("organization") != source_pk:
+                continue
+            out[i["pk"]] = f.get("slug")
+        return out
 
     def build_rule_projects(self, data: List[Dict]) -> Dict[int, List[int]]:
         out: Dict[int, List[int]] = {}
         for i in data:
-            if i.get("model") == "sentry.alertruleprojects":
+            if isinstance(i, dict) and i.get("model") == "sentry.alertruleprojects":
                 f = i.get("fields", {})
                 out.setdefault(f.get("alert_rule"), []).append(f.get("project"))
         return out
@@ -62,7 +91,7 @@ class AlertRuleMigrator:
     def build_rule_triggers(self, data: List[Dict]) -> Dict[int, List[Dict]]:
         out: Dict[int, List[Dict]] = {}
         for i in data:
-            if i.get("model") == "sentry.alertruletrigger":
+            if isinstance(i, dict) and i.get("model") == "sentry.alertruletrigger":
                 f = i.get("fields", {})
                 out.setdefault(f.get("alert_rule"), []).append({
                     "label": f.get("label", "critical"),
@@ -99,20 +128,25 @@ class AlertRuleMigrator:
         logger.info(f"Loaded {len(team_mappings)} team mappings")
         return team_mappings
 
-    def migrate_alert_rules(self, export_file: str, org_slug: str, team_mappings_file: str):
+    def migrate_alert_rules(self, export_file: str, org_slug: str, team_mappings_file: str,
+                            source_org: str = None):
         data = self.load_export_data(export_file)
+        source_pk = self.resolve_source_org_pk(data, source_org)
+        if source_pk is not None:
+            logger.info(f"Filtering to source org '{source_org or '(only org in file)'}' (pk {source_pk})")
         team_map = self.load_team_mappings(team_mappings_file)
 
         snuba_index = self.build_snuba_index(data)
         event_types = self.build_event_types(data)
-        project_slugs = self.build_project_slugs(data)
+        # project_slugs is scoped to the source org; rules whose projects are all outside it are skipped.
+        project_slugs = self.build_project_slugs(data, source_pk=source_pk)
         rule_projects = self.build_rule_projects(data)
         rule_triggers = self.build_rule_triggers(data)
 
-        migrated_rules, failed_rules, skipped = [], [], []
+        migrated_rules, failed_rules, skipped, skipped_other_org = [], [], [], []
 
         # Flag (but do not migrate) issue alerts
-        issue_alerts = [i for i in data if i.get("model") == "sentry.rule"]
+        issue_alerts = [i for i in data if isinstance(i, dict) and i.get("model") == "sentry.rule"]
         for ia in issue_alerts:
             skipped.append({
                 "pk": ia.get("pk"),
@@ -121,7 +155,7 @@ class AlertRuleMigrator:
             })
 
         for item in data:
-            if item.get("model") != "sentry.alertrule":
+            if not isinstance(item, dict) or item.get("model") != "sentry.alertrule":
                 continue
             pk = item.get("pk")
             fields = item.get("fields", {})
@@ -135,6 +169,13 @@ class AlertRuleMigrator:
 
             # projects: map source project pks -> slugs
             proj_pks = rule_projects.get(pk, [])
+            # When filtering by source org, drop rules whose projects all belong to another org.
+            if source_pk is not None:
+                in_scope = [p for p in proj_pks if p in project_slugs]
+                if proj_pks and not in_scope:
+                    skipped_other_org.append({"pk": pk, "name": name, "reason": "Rule belongs to another org"})
+                    continue
+                proj_pks = in_scope
             projects = [project_slugs.get(p) for p in proj_pks if project_slugs.get(p)]
             if not projects:
                 failed_rules.append((pk, "No project mapping found (alertruleprojects empty)"))
@@ -185,15 +226,16 @@ class AlertRuleMigrator:
                 failed_rules.append((pk, str(e)))
                 logger.error(f"Failed to migrate alert rule {pk}: {e}")
 
-        return migrated_rules, failed_rules, skipped
+        return migrated_rules, failed_rules, skipped, skipped_other_org
 
 
 def main():
     parser = argparse.ArgumentParser(description='Migrate Sentry metric alert rules')
     parser.add_argument('auth_token', help='Sentry auth token')
-    parser.add_argument('org_slug', help='Organization slug')
+    parser.add_argument('org_slug', help='Destination SaaS organization slug')
     parser.add_argument('export_file', help='Path to export.json file')
     parser.add_argument('team_mappings_file', help='project_team_sync_results.json from create_sentry_teams.py')
+    parser.add_argument('--source-org', help='Source org slug to migrate (required when the export holds multiple orgs)')
     parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
     args = parser.parse_args()
 
@@ -201,13 +243,19 @@ def main():
         logger.info("=== DRY RUN: no changes will be made to SaaS ===")
 
     migrator = AlertRuleMigrator(args.auth_token, dry_run=args.dry_run)
-    migrated, failed, skipped = migrator.migrate_alert_rules(args.export_file, args.org_slug, args.team_mappings_file)
+    migrated, failed, skipped, skipped_other_org = migrator.migrate_alert_rules(
+        args.export_file, args.org_slug, args.team_mappings_file, source_org=args.source_org)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    with open(f"alert_rule_migration_results_{timestamp}.json", 'w') as f:
-        json.dump({"migrated": migrated, "failed": failed, "skipped_issue_alerts": skipped}, f, indent=2)
+    # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
+    tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"
+    out = f"alert_rule_migration_results_{tag}.json"
+    with open(out, 'w') as f:
+        json.dump({"migrated": migrated, "failed": failed, "skipped_issue_alerts": skipped,
+                   "skipped_other_org": skipped_other_org}, f, indent=2)
 
-    logger.info(f"Completed. Migrated: {len(migrated)}, Failed: {len(failed)}, Skipped issue alerts: {len(skipped)}")
+    logger.info(f"Completed. Migrated: {len(migrated)}, Failed: {len(failed)}, "
+                f"Skipped issue alerts: {len(skipped)}, Skipped other-org rules: {len(skipped_other_org)}")
+    logger.info(f"Wrote {out}")
 
 
 if __name__ == "__main__":

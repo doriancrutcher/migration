@@ -10,9 +10,9 @@ MANY orgs; records are bucketed to their org via the `organization` FK, and ever
 file is compared against every other in one pool.
 
 What counts as a hard blocker for a merged create (vs. informational):
-  - PROJECT collision        -> DANGER. The migration preserves each project's existing slug, and slugs
-    must be unique within a merged SaaS org, so two projects that share a slug clash. Detected on the
-    ORIGINAL slug (falls back to slugify(name) only when a project has no stored slug).
+  - PROJECT collision        -> DANGER. The migration sends each project's existing slug on create, so
+    SaaS preserves it; slugs must be unique within a merged SaaS org, so two projects that share a slug
+    clash. Detected on the ORIGINAL slug.
   - TEAM SLUG collision      -> DANGER. Teams are created with an explicit slug, which must be unique.
   - TEAM NAME collision      -> informational, but flagged with a MEMBERSHIP DIFF (same team name, but a
     different set of people in each org -- a real merge hazard).
@@ -26,7 +26,6 @@ Usage:
 Writes duplicate_report.json (and, with --html, a self-contained duplicate_report.html) and exits
 non-zero if any HARD collision is found.
 """
-import re
 import sys
 import json
 import html as html_lib
@@ -42,12 +41,6 @@ logger = logging.getLogger(__name__)
 
 def _norm(s: str) -> str:
     return (s or "").strip().lower()
-
-
-def slugify(name: str) -> str:
-    """Approximate how Sentry derives a project slug from its name (lowercase, non-alphanumeric -> '-').
-    This is what actually gets created on SaaS, so two names that slugify the same will clash."""
-    return re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
 
 
 def load(path: str):
@@ -138,13 +131,13 @@ def _group(orgs, extractor):
 
 
 def project_collisions(orgs):
-    """Group projects across orgs by their ORIGINAL slug. The migration preserves each project's
-    existing slug, and slugs must be unique within a merged SaaS org, so two projects that share a
-    slug are what actually clash. Falls back to slugify(name) only when a project has no stored slug."""
+    """Group projects across orgs by their ORIGINAL slug. The migration sends each project's existing
+    slug on create, so SaaS preserves it; slugs must be unique within a merged org, so two projects
+    that share a slug are what actually clash. Every Sentry project has a slug, so no fallback."""
     def extract(o):
         rows = []
         for p in o["projects"]:
-            key = _norm(p["slug"]) or slugify(p["name"])
+            key = _norm(p["slug"])
             rows.append((key, {"slug": p["slug"], "name": p["name"], "key": key}))
         return rows
     return _group(orgs, extract)
@@ -234,12 +227,9 @@ def _html_project_section(title, note_class, dups):
     for key, group in sorted(dups.items()):
         items = []
         for item in group:
-            note = ""
-            if not _norm(item["slug"]):
-                note = ' <span class="note">(no stored slug &mdash; keyed on slugified name)</span>'
             items.append(
                 f'<li><span class="org">{esc(item["org"])}</span> '
-                f'&mdash; slug <code>{esc(item["slug"])}</code>, name &ldquo;{esc(item["name"])}&rdquo;{note}</li>'
+                f'&mdash; slug <code>{esc(item["slug"])}</code>, name &ldquo;{esc(item["name"])}&rdquo;</li>'
             )
         orgs = "".join(items)
         rows.append(
