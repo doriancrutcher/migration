@@ -67,7 +67,8 @@ Core (done, tagged `v1.0-core`):
 
 - Projects
 - Teams & membership
-- Alert rules (metric)
+- Alert rules (metric); **issue alerts added post-`v1.0-core` in `feat/issue-alerts`** (DONE — both alert
+  types now migrated; issue-alert notification actions defaulted to email the owner team, see DECISIONS.md D9)
 
 Pre-flight (run first, before any migration):
 

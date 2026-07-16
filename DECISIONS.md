@@ -4,6 +4,20 @@ A running record of scope/design choices made per feature -- especially things w
 deferred or excluded and may want to revisit. Newest first. Each entry: what was decided, why, and
 what would change it.
 
+## D9 - Issue alerts migrated; notification action defaulted to the owner team (supersedes D1)
+- Feature: `feat/issue-alerts`
+- Decision: migrate issue alerts (`sentry.rule`) alongside metric alerts via
+  `/projects/{org}/{project}/rules/`. Carry over each rule's `conditions`/`filters`/`actionMatch`/
+  `filterMatch`/`frequency` and environment name, but **replace the notification actions** with a single
+  default: email the mapped **owner team** (`targetType:Team`), falling back to `IssueOwners` /
+  `ActiveMembers` when a rule has no owner team. `--skip-issue-alerts` reverts to metric-only.
+- Why: conditions/filters use stable rule-class ids that are identical across self-hosted and SaaS, so they
+  port directly; the original **actions** reference instance-specific team/user ids (and other integrations)
+  that don't map cleanly, so -- mirroring the metric-alert behavior and per the supervisor's OK -- we inject a
+  safe default rather than guess. Owner-team email keeps notifications going to a real destination.
+- Revisit if: the customer needs the **original** notification actions preserved (Slack/PagerDuty/specific
+  users) -- that needs an integration/user id mapping layer, a follow-up beyond this feature.
+
 ## D8 - Ship distinct, separately-run tools; no single orchestrating wizard
 - Feature: delivery model (affects `feat/wizard`, now dropped as the default path)
 - Decision: the toolkit is delivered as **distinct tools the operator runs one at a time, in a
@@ -62,9 +76,9 @@ what would change it.
 - Revisit if: real roles must be preserved -> `feat/member-roles` (PUT the true `orgRole` after invite,
   needs a `member:admin` token).
 
-## D1 - Alerts: metric alerts only
+## D1 - Alerts: metric alerts only ~~(SUPERSEDED by D9)~~
 - Feature: core (phase-2)
-- Decision: migrate metric alert rules; issue alerts (`sentry.rule`) are detected and reported as
+- Decision (original): migrate metric alert rules; issue alerts (`sentry.rule`) are detected and reported as
   skipped, not migrated. Notification actions are not preserved (a default action is injected).
 - Why: issue alerts use a different endpoint/schema; out of the promised core scope.
-- Revisit if: issue alerts / real notification actions are required -> a dedicated alerts follow-up.
+- Update: issue alerts are now migrated too -- see **D9**. Notification actions remain defaulted.

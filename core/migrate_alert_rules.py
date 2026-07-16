@@ -8,9 +8,13 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Handles METRIC alert rules (sentry.alertrule). Issue alerts (sentry.rule) are
-# reported but NOT migrated by this script -- their action/condition schema is
-# different and needs the /projects/{org}/{proj}/rules/ endpoint.
+# Handles both alert types:
+#   - METRIC alerts (sentry.alertrule)  -> /organizations/{org}/alert-rules/
+#   - ISSUE  alerts (sentry.rule)       -> /projects/{org}/{proj}/rules/
+# For issue alerts the original conditions/filters (which use stable, cross-instance
+# rule-class ids) are carried over, but the notification actions are NOT in a portable
+# form, so -- like metric alerts -- we inject a default "email the owner team" action
+# (falling back to IssueOwners/ActiveMembers when a rule has no owner team).
 
 # SnubaQueryEventType.EventType -> API eventTypes string
 EVENT_TYPE_MAP = {0: "error", 1: "default", 2: "transaction"}
@@ -51,6 +55,13 @@ class AlertRuleMigrator:
             for i in data if i.get("model") == "sentry.project"
         }
 
+    def build_environments(self, data: List[Dict]) -> Dict[int, str]:
+        """environment pk -> name (SaaS rules take an environment name or null)."""
+        return {
+            i["pk"]: i.get("fields", {}).get("name")
+            for i in data if i.get("model") == "sentry.environment"
+        }
+
     def build_rule_projects(self, data: List[Dict]) -> Dict[int, List[int]]:
         out: Dict[int, List[int]] = {}
         for i in data:
@@ -86,6 +97,95 @@ class AlertRuleMigrator:
                 logger.error(f"Response: {e.response.text}")
             raise
 
+    def create_issue_alert_rule(self, org_slug: str, project_slug: str, payload: Dict) -> Dict:
+        url = f"{self.base_url}/projects/{org_slug}/{project_slug}/rules/"
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] POST {url} payload={json.dumps(payload)}")
+            return {"id": "dry-run", "name": payload.get("name"), "project": project_slug, "dry_run": True}
+        try:
+            response = requests.post(url, headers=self.headers, json=payload)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to create issue alert rule: {str(e)}")
+            if hasattr(e, "response") and e.response is not None and hasattr(e.response, "text"):
+                logger.error(f"Response: {e.response.text}")
+            raise
+
+    @staticmethod
+    def _default_issue_action(team_new_id) -> Dict:
+        """Default notification for a migrated issue alert: email the owner team, or
+        fall back to the issue's suggested owners when no team maps."""
+        if team_new_id is not None:
+            return {
+                "id": "sentry.mail.actions.NotifyEmailAction",
+                "targetType": "Team",
+                "targetIdentifier": str(team_new_id),
+                "fallthroughType": "ActiveMembers",
+            }
+        return {
+            "id": "sentry.mail.actions.NotifyEmailAction",
+            "targetType": "IssueOwners",
+            "targetIdentifier": None,
+            "fallthroughType": "ActiveMembers",
+        }
+
+    def migrate_issue_alerts(self, data: List[Dict], org_slug: str,
+                             project_slugs: Dict[int, str], team_map: Dict[str, str],
+                             env_index: Dict[int, str]):
+        """Recreate sentry.rule issue alerts via the project rules endpoint."""
+        migrated, failed = [], []
+        for item in data:
+            if item.get("model") != "sentry.rule":
+                continue
+            pk = item.get("pk")
+            fields = item.get("fields", {})
+            name = fields.get("label")
+
+            project_slug = project_slugs.get(fields.get("project"))
+            if not project_slug:
+                failed.append((pk, "No project mapping found for issue alert"))
+                logger.error(f"Issue alert {pk}: no project slug for project pk {fields.get('project')}")
+                continue
+
+            raw = fields.get("data")
+            try:
+                blob = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except (ValueError, TypeError):
+                failed.append((pk, "Unparseable rule data blob"))
+                logger.error(f"Issue alert {pk}: could not parse data blob")
+                continue
+
+            team_pk = fields.get("owner_team")
+            team_new_id = team_map.get(str(team_pk)) if team_pk is not None else None
+            if team_pk is not None and team_new_id is None:
+                logger.warning(f"Issue alert {pk}: no team mapping for owner team pk {team_pk}; "
+                               f"defaulting action to IssueOwners")
+
+            env_name = env_index.get(fields.get("environment_id")) if fields.get("environment_id") else None
+
+            payload = {
+                "name": name,
+                "actionMatch": blob.get("action_match", "any"),
+                "filterMatch": blob.get("filter_match", "all"),
+                "frequency": blob.get("frequency", 30),
+                "environment": env_name,
+                "conditions": blob.get("conditions", []),
+                "filters": blob.get("filters", []),
+                "actions": [self._default_issue_action(team_new_id)],
+            }
+            if team_new_id is not None:
+                payload["owner"] = f"team:{team_new_id}"
+
+            try:
+                new_rule = self.create_issue_alert_rule(org_slug, project_slug, payload)
+                migrated.append(new_rule)
+                logger.info(f"Migrated issue alert '{name}' -> project {project_slug}")
+            except Exception as e:
+                failed.append((pk, str(e)))
+                logger.error(f"Failed to migrate issue alert {pk}: {e}")
+        return migrated, failed
+
     def load_team_mappings(self, mappings_file: str) -> Dict[str, str]:
         """old team pk -> new SaaS team id, from project_team_sync_results.json."""
         with open(mappings_file, "r") as f:
@@ -99,7 +199,8 @@ class AlertRuleMigrator:
         logger.info(f"Loaded {len(team_mappings)} team mappings")
         return team_mappings
 
-    def migrate_alert_rules(self, export_file: str, org_slug: str, team_mappings_file: str):
+    def migrate_alert_rules(self, export_file: str, org_slug: str, team_mappings_file: str,
+                            migrate_issue: bool = True):
         data = self.load_export_data(export_file)
         team_map = self.load_team_mappings(team_mappings_file)
 
@@ -108,17 +209,9 @@ class AlertRuleMigrator:
         project_slugs = self.build_project_slugs(data)
         rule_projects = self.build_rule_projects(data)
         rule_triggers = self.build_rule_triggers(data)
+        env_index = self.build_environments(data)
 
-        migrated_rules, failed_rules, skipped = [], [], []
-
-        # Flag (but do not migrate) issue alerts
-        issue_alerts = [i for i in data if i.get("model") == "sentry.rule"]
-        for ia in issue_alerts:
-            skipped.append({
-                "pk": ia.get("pk"),
-                "label": ia.get("fields", {}).get("label"),
-                "reason": "Issue alert (sentry.rule) not supported by this script",
-            })
+        migrated_rules, failed_rules = [], []
 
         for item in data:
             if item.get("model") != "sentry.alertrule":
@@ -185,29 +278,47 @@ class AlertRuleMigrator:
                 failed_rules.append((pk, str(e)))
                 logger.error(f"Failed to migrate alert rule {pk}: {e}")
 
-        return migrated_rules, failed_rules, skipped
+        issue_migrated, issue_failed = [], []
+        if migrate_issue:
+            issue_migrated, issue_failed = self.migrate_issue_alerts(
+                data, org_slug, project_slugs, team_map, env_index
+            )
+
+        return {
+            "metric": {"migrated": migrated_rules, "failed": failed_rules},
+            "issue": {"migrated": issue_migrated, "failed": issue_failed},
+        }
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Migrate Sentry metric alert rules')
+    parser = argparse.ArgumentParser(description='Migrate Sentry metric and issue alert rules')
     parser.add_argument('auth_token', help='Sentry auth token')
     parser.add_argument('org_slug', help='Organization slug')
     parser.add_argument('export_file', help='Path to export.json file')
     parser.add_argument('team_mappings_file', help='project_team_sync_results.json from create_sentry_teams.py')
     parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
+    parser.add_argument('--skip-issue-alerts', action='store_true',
+                        help='Migrate metric alerts only (skip sentry.rule issue alerts)')
     args = parser.parse_args()
 
     if args.dry_run:
         logger.info("=== DRY RUN: no changes will be made to SaaS ===")
 
     migrator = AlertRuleMigrator(args.auth_token, dry_run=args.dry_run)
-    migrated, failed, skipped = migrator.migrate_alert_rules(args.export_file, args.org_slug, args.team_mappings_file)
+    results = migrator.migrate_alert_rules(
+        args.export_file, args.org_slug, args.team_mappings_file,
+        migrate_issue=not args.skip_issue_alerts,
+    )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     with open(f"alert_rule_migration_results_{timestamp}.json", 'w') as f:
-        json.dump({"migrated": migrated, "failed": failed, "skipped_issue_alerts": skipped}, f, indent=2)
+        json.dump(results, f, indent=2)
 
-    logger.info(f"Completed. Migrated: {len(migrated)}, Failed: {len(failed)}, Skipped issue alerts: {len(skipped)}")
+    m, i = results["metric"], results["issue"]
+    logger.info(
+        f"Completed. Metric alerts migrated: {len(m['migrated'])}, failed: {len(m['failed'])} | "
+        f"Issue alerts migrated: {len(i['migrated'])}, failed: {len(i['failed'])}"
+    )
 
 
 if __name__ == "__main__":

@@ -89,6 +89,17 @@ previously raised `AttributeError` on non-HTTP exceptions and masked the real er
 Repo restructured around a `main` trunk with one `feat/<data-type>` branch + PR per remaining data
 type (see `ROADMAP.md`).
 
+### Added (feat/issue-alerts)
+
+- `migrate_alert_rules.py` now migrates **issue alerts** (`sentry.rule`) in addition to metric alerts,
+  POSTing to `/projects/{org}/{project}/rules/`. It carries over each rule's
+  `conditions`/`filters`/`actionMatch`/`filterMatch`/`frequency` and maps the environment name; the
+  notification **action is defaulted** to email the mapped owner team (`targetType:Team`), falling back to
+  `IssueOwners`/`ActiveMembers` when a rule has no owner team (see DECISIONS D9).
+- `--skip-issue-alerts` flag on `migrate_alert_rules.py` (metric-only behavior).
+- Results file now has separate `metric` and `issue` sections (`{migrated, failed}` each); the completion
+  log reports both counts.
+
 ### Docs
 
 - Renamed the destination-org env var `ORG` -> `DEST_ORG` across the README and settings-folder READMEs, to
