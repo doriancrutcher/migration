@@ -236,13 +236,20 @@ def main():
     parser.add_argument('export_file', help='Path to export.json file')
     parser.add_argument('team_mappings_file', help='project_team_sync_results.json from create_sentry_teams.py')
     parser.add_argument('--source-org', help='Source org slug to migrate (required when the export holds multiple orgs)')
-    parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
+    parser.add_argument('--run_on_real_data', type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
+                        default=False, metavar='true|false',
+                        help='Set to true to actually perform changes. Default false = dry-run.')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='(default) Dry-run is on by default; accepted for compatibility and is a no-op.')
     args = parser.parse_args()
 
-    if args.dry_run:
-        logger.info("=== DRY RUN: no changes will be made to SaaS ===")
+    dry_run = not args.run_on_real_data
+    if dry_run:
+        logger.info("=== DRY RUN (default): no changes will be made to SaaS. Pass --run_on_real_data=true to apply. ===")
+    else:
+        logger.info("=== EXECUTE: changes WILL be made to SaaS ===")
 
-    migrator = AlertRuleMigrator(args.auth_token, dry_run=args.dry_run)
+    migrator = AlertRuleMigrator(args.auth_token, dry_run=dry_run)
     migrated, failed, skipped, skipped_other_org = migrator.migrate_alert_rules(
         args.export_file, args.org_slug, args.team_mappings_file, source_org=args.source_org)
 

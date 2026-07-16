@@ -259,7 +259,11 @@ def main():
     parser.add_argument('org_slug', help='Destination SaaS organization slug')
     parser.add_argument('export_file', help='JSON export file path')
     parser.add_argument('--source-org', help='Source org slug to migrate (required when the export holds multiple orgs)')
-    parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
+    parser.add_argument('--run_on_real_data', type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
+                        default=False, metavar='true|false',
+                        help='Set to true to actually perform changes. Default false = dry-run.')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='(default) Dry-run is on by default; accepted for compatibility and is a no-op.')
     args = parser.parse_args()
 
     auth_token = args.auth_token
@@ -267,9 +271,12 @@ def main():
     export_file = args.export_file
 
     try:
-        if args.dry_run:
-            logger.info("=== DRY RUN: no changes will be made to SaaS ===")
-        mapper = SentryTeamProjectMapper(auth_token, org_slug, dry_run=args.dry_run)
+        dry_run = not args.run_on_real_data
+        if dry_run:
+            logger.info("=== DRY RUN (default): no changes will be made to SaaS. Pass --run_on_real_data=true to apply. ===")
+        else:
+            logger.info("=== EXECUTE: changes WILL be made to SaaS ===")
+        mapper = SentryTeamProjectMapper(auth_token, org_slug, dry_run=dry_run)
         results = mapper.sync_project_teams(export_file, org_slug, source_org=args.source_org)
         
         logger.info("Project-team sync completed:")

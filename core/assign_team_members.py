@@ -178,7 +178,11 @@ def main():
     parser.add_argument('export_file', help='JSON export file path')
     parser.add_argument('mappings_file', help='user_mappings_for_teams.json from add_sentry_members.py')
     parser.add_argument('--source-org', help='Source org slug to migrate (required when the export holds multiple orgs)')
-    parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
+    parser.add_argument('--run_on_real_data', type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
+                        default=False, metavar='true|false',
+                        help='Set to true to actually perform changes. Default false = dry-run.')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='(default) Dry-run is on by default; accepted for compatibility and is a no-op.')
     args = parser.parse_args()
 
     auth_token = args.auth_token
@@ -187,9 +191,12 @@ def main():
     mappings_file = args.mappings_file
 
     try:
-        if args.dry_run:
-            logger.info("=== DRY RUN: no changes will be made to SaaS ===")
-        manager = SentryTeamMemberManager(auth_token, dry_run=args.dry_run)
+        dry_run = not args.run_on_real_data
+        if dry_run:
+            logger.info("=== DRY RUN (default): no changes will be made to SaaS. Pass --run_on_real_data=true to apply. ===")
+        else:
+            logger.info("=== EXECUTE: changes WILL be made to SaaS ===")
+        manager = SentryTeamMemberManager(auth_token, dry_run=dry_run)
         results = manager.sync_team_members(export_file, mappings_file, org_slug, source_org=args.source_org)
         
         logger.info("Team member sync completed:")

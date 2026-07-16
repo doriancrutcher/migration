@@ -173,14 +173,21 @@ def main():
     parser.add_argument('export_file', help='JSON export file path')
     parser.add_argument('--source-org', help='Source org slug to migrate (required when the export holds multiple orgs)')
     parser.add_argument('--delete', action='store_true', help='Delete projects instead of creating them')
-    parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
+    parser.add_argument('--run_on_real_data', type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
+                        default=False, metavar='true|false',
+                        help='Set to true to actually perform changes. Default false = dry-run.')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='(default) Dry-run is on by default; accepted for compatibility and is a no-op.')
 
     args = parser.parse_args()
 
     try:
-        manager = SentryProjectManager(args.auth_token, dry_run=args.dry_run)
-        if args.dry_run:
-            logger.info("=== DRY RUN: no changes will be made to SaaS ===")
+        dry_run = not args.run_on_real_data
+        manager = SentryProjectManager(args.auth_token, dry_run=dry_run)
+        if dry_run:
+            logger.info("=== DRY RUN (default): no changes will be made to SaaS. Pass --run_on_real_data=true to apply. ===")
+        else:
+            logger.info("=== EXECUTE: changes WILL be made to SaaS ===")
         results = manager.sync_projects(args.export_file, args.org_slug, args.delete, source_org=args.source_org)
 
         logger.info("Project management completed:")

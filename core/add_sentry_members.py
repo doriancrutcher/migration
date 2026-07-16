@@ -265,17 +265,24 @@ def main():
     parser.add_argument('--delete', help='Delete members using mappings file', metavar='MAPPINGS_FILE')
     parser.add_argument('--export-file', help='Export JSON file path for adding members')
     parser.add_argument('--test', help='Test mode with Gmail alias (e.g., your.email@gmail.com)', metavar='EMAIL')
-    parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
+    parser.add_argument('--run_on_real_data', type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
+                        default=False, metavar='true|false',
+                        help='Set to true to actually perform changes. Default false = dry-run.')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='(default) Dry-run is on by default; accepted for compatibility and is a no-op.')
     parser.add_argument('--send-invite', action='store_true', help='Send invitation emails (sets sendInvite/reinvite true)')
 
     args = parser.parse_args()
 
     try:
-        if args.dry_run:
-            logger.info("=== DRY RUN: no changes will be made to SaaS ===")
+        dry_run = not args.run_on_real_data
+        if dry_run:
+            logger.info("=== DRY RUN (default): no changes will be made to SaaS. Pass --run_on_real_data=true to apply. ===")
+        else:
+            logger.info("=== EXECUTE: changes WILL be made to SaaS ===")
         if args.send_invite:
             logger.info("=== send-invite ON: invitation emails will be sent ===")
-        manager = SentryMemberManager(args.auth_token, test_email=args.test, dry_run=args.dry_run, send_invite=args.send_invite)
+        manager = SentryMemberManager(args.auth_token, test_email=args.test, dry_run=dry_run, send_invite=args.send_invite)
 
         # Tag outputs with source org, dest org, and timestamp so per-org runs never overwrite.
         tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"
