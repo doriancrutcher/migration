@@ -228,12 +228,12 @@ def _html_project_section(title, note_class, dups):
         items = []
         for item in group:
             items.append(
-                f'<li><span class="org">{esc(item["org"])}</span> '
+                f'<li data-org="{esc(item["org"])}"><span class="org">{esc(item["org"])}</span> '
                 f'&mdash; slug <code>{esc(item["slug"])}</code>, name &ldquo;{esc(item["name"])}&rdquo;</li>'
             )
         orgs = "".join(items)
         rows.append(
-            f'<tr><td class="key"><code>{esc(key)}</code></td>'
+            f'<tr data-group="project"><td class="key"><code>{esc(key)}</code></td>'
             f'<td><span class="badge {note_class}">{esc(note_class.upper())}</span></td>'
             f'<td><ul class="orglist">{orgs}</ul></td></tr>'
         )
@@ -249,11 +249,6 @@ def _html_team_section(title, note_class, collisions, key_noun="team"):
         return f'<section><h2>{esc(title)}</h2><p class="empty">none</p></section>'
     blocks = []
     for key, info in sorted(collisions.items()):
-        diff_badge = (
-            '<span class="badge different">DIFFERENT rosters</span>'
-            if not info["identical_rosters"]
-            else '<span class="badge same">identical rosters</span>'
-        )
         common = (
             ", ".join(esc(m) for m in info["common_members"]) if info["common_members"] else "(none)"
         )
@@ -261,8 +256,10 @@ def _html_team_section(title, note_class, collisions, key_noun="team"):
         for org_display, m in info["membership"].items():
             members = ", ".join(esc(x) for x in m["members"]) or "(none)"
             unique = ", ".join(esc(x) for x in m["unique_to_this_org"]) or "(none)"
+            members_json = esc(json.dumps(m["members"]))
             per_org.append(
-                f'<div class="orgroster"><div class="org"><span class="mlabel">organization:</span> {esc(org_display)}</div>'
+                f'<div class="orgroster" data-org="{esc(org_display)}" data-members="{members_json}">'
+                f'<div class="org"><span class="mlabel">organization:</span> {esc(org_display)}</div>'
                 f'<div class="mline"><span class="mlabel">members:</span> {members}</div>'
                 f'<div class="mline"><span class="mlabel">unique to this org:</span> '
                 f'<span class="unique">{unique}</span></div></div>'
@@ -271,9 +268,10 @@ def _html_team_section(title, note_class, collisions, key_noun="team"):
             f'<div class="teamblock">'
             f'<div class="teamhead"><span class="keylabel">duplicate {esc(key_noun)}:</span> '
             f'<code class="key">{esc(info["label"])}</code> '
-            f'<span class="badge {note_class}">{esc(note_class.upper())}</span> {diff_badge} '
+            f'<span class="badge {note_class}">{esc(note_class.upper())}</span> '
+            f'<span class="badge different roster-badge">{"DIFFERENT rosters" if not info["identical_rosters"] else "identical rosters"}</span> '
             f'<span class="inorgs">in {esc(", ".join(info["orgs"]))}</span></div>'
-            f'<div class="common"><span class="mlabel">common members:</span> {common}</div>'
+            f'<div class="common"><span class="mlabel">common members:</span> <span class="common-val">{common}</span></div>'
             f'<div class="rosters">{"".join(per_org)}</div></div>'
         )
     return f'<section><h2>{esc(title)}</h2>{"".join(blocks)}</section>'
@@ -285,7 +283,7 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
     hard_class = "danger" if hard else "ok"
 
     org_cards = "".join(
-        f'<div class="card"><div class="cardname">{esc(o["display"])}</div>'
+        f'<div class="card" data-org="{esc(o["display"])}"><div class="cardname">{esc(o["display"])}</div>'
         f'<div class="cardsub">{esc(o["name"])}</div>'
         f'<div class="cardstats">{o["teams"]} teams &middot; {o["projects"]} projects</div>'
         f'<div class="cardfile"><code>{esc(o["source_file"])}</code></div></div>'
@@ -293,6 +291,106 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
     )
 
     files = ", ".join(esc(f) for f in exports)
+
+    # Plain (non-f) string so JS braces don't need escaping. Recomputes the view when orgs are
+    # toggled: a collision row stays visible only if >=2 still-selected orgs share it, and team
+    # rosters/common/unique members are recomputed among the selected orgs.
+    script = """<script>
+(function () {
+  var deselected = new Set();
+
+  function recompute() {
+    // Project rows: keep row only if >=2 selected orgs still share the slug.
+    document.querySelectorAll('tr[data-group="project"]').forEach(function (tr) {
+      var visible = 0;
+      tr.querySelectorAll('li[data-org]').forEach(function (li) {
+        var off = deselected.has(li.getAttribute('data-org'));
+        li.style.display = off ? 'none' : '';
+        if (!off) visible++;
+      });
+      tr.style.display = visible >= 2 ? '' : 'none';
+    });
+
+    // Team blocks: recompute rosters, common, unique among selected orgs.
+    document.querySelectorAll('.teamblock').forEach(function (tb) {
+      var rosters = [].slice.call(tb.querySelectorAll('.orgroster[data-org]'));
+      var shown = [];
+      rosters.forEach(function (r) {
+        var off = deselected.has(r.getAttribute('data-org'));
+        r.style.display = off ? 'none' : '';
+        if (!off) shown.push(r);
+      });
+      var names = shown.map(function (r) { return r.getAttribute('data-org'); });
+      var sets = shown.map(function (r) {
+        try { return JSON.parse(r.getAttribute('data-members') || '[]'); } catch (e) { return []; }
+      });
+      var common = sets.length
+        ? sets[0].filter(function (m) { return sets.every(function (s) { return s.indexOf(m) !== -1; }); })
+        : [];
+      shown.forEach(function (r, i) {
+        var others = sets.filter(function (_, j) { return j !== i; });
+        var uniq = sets[i].filter(function (m) {
+          return !others.some(function (s) { return s.indexOf(m) !== -1; });
+        });
+        var uEl = r.querySelector('.unique');
+        if (uEl) uEl.textContent = uniq.length ? uniq.join(', ') : '(none)';
+      });
+      var cEl = tb.querySelector('.common-val');
+      if (cEl) cEl.textContent = common.length ? common.join(', ') : '(none)';
+      var inEl = tb.querySelector('.inorgs');
+      if (inEl) inEl.textContent = names.length ? ('in ' + names.join(', ')) : '';
+      var identical = sets.length >= 2 && sets.every(function (s) {
+        return s.length === sets[0].length && s.every(function (m) { return sets[0].indexOf(m) !== -1; });
+      });
+      var b = tb.querySelector('.roster-badge');
+      if (b) b.textContent = identical ? 'identical rosters' : 'DIFFERENT rosters';
+      tb.style.display = names.length >= 2 ? '' : 'none';
+    });
+
+    updateCounts();
+  }
+
+  function visibleCount(sel) {
+    return [].filter.call(document.querySelectorAll(sel), function (el) {
+      return el.style.display !== 'none';
+    }).length;
+  }
+
+  function setText(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; }
+
+  function updateCounts() {
+    var proj = visibleCount('tr[data-group="project"]');
+    var team = visibleCount('.teamblock');
+    var hard = proj + team;
+    setText('count-project', proj);
+    setText('count-teamslug', team);
+    setText('count-hard', hard);
+    setText('bignum', hard);
+    var big = document.getElementById('bignum');
+    if (big) { big.classList.toggle('danger', hard > 0); big.classList.toggle('ok', hard === 0); }
+    var cards = document.querySelectorAll('.card[data-org]');
+    setText('org-status', (cards.length - deselected.size) + ' of ' + cards.length + ' orgs shown');
+  }
+
+  document.querySelectorAll('.card[data-org]').forEach(function (card) {
+    function toggle() {
+      var org = card.getAttribute('data-org');
+      if (deselected.has(org)) { deselected.delete(org); card.classList.remove('deselected'); card.setAttribute('aria-pressed', 'true'); }
+      else { deselected.add(org); card.classList.add('deselected'); card.setAttribute('aria-pressed', 'false'); }
+      recompute();
+    }
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
+    card.setAttribute('aria-pressed', 'true');
+    card.addEventListener('click', toggle);
+    card.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+  });
+
+  recompute();
+})();
+</script>"""
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -317,8 +415,17 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
     color: #666; margin-bottom: 8px; }}
   .legitem {{ font-size: 13px; margin-bottom: 6px; }}
   .legitem .badge {{ margin-right: 8px; vertical-align: middle; }}
+  .orgcontrols {{ font-size: 13px; color: #666; margin-bottom: 8px; }}
+  .orgcontrols b {{ color: #1a1a1a; }}
   .cards {{ display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }}
-  .card {{ border: 1px solid #e2e2e2; border-radius: 8px; padding: 12px 14px; min-width: 160px; }}
+  .card {{ border: 1px solid #e2e2e2; border-radius: 8px; padding: 12px 14px; min-width: 160px;
+    cursor: pointer; user-select: none; position: relative; transition: opacity .12s, border-color .12s; }}
+  .card:hover {{ border-color: #999; }}
+  .card::before {{ content: "\\2713"; position: absolute; top: 8px; right: 10px; font-size: 12px;
+    font-weight: 700; color: #1e7e34; }}
+  .card.deselected {{ opacity: .45; }}
+  .card.deselected::before {{ content: "\\2715"; color: #b3261e; }}
+  .card.deselected .cardname {{ text-decoration: line-through; }}
   .cardname {{ font-weight: 600; }}
   .cardsub {{ color: #666; font-size: 13px; }}
   .cardstats {{ margin-top: 6px; font-size: 13px; }}
@@ -368,10 +475,11 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
   <div class="meta">Generated {esc(generated_at)} &middot; sources: <code>{files}</code></div>
 
   <div class="summary">
-    <div class="bignum {hard_class}">{hard}</div>
+    <div class="bignum {hard_class}" id="bignum">{hard}</div>
     <div class="counts">
-      <div><b>{hard}</b> Danger collision group(s) &mdash; block a merged migration</div>
-      <div>project {s["project_collisions"]} &middot; team-slug {s["team_slug_collisions"]}
+      <div><b id="count-hard">{hard}</b> Danger collision group(s) &mdash; block a merged migration</div>
+      <div>project <span id="count-project">{s["project_collisions"]}</span> &middot;
+        team-slug <span id="count-teamslug">{s["team_slug_collisions"]}</span>
         &middot; team-name {s["team_name_collisions"]} (info) &middot;
         similar-names {s["similar_org_name_pairs"]} (info)</div>
     </div>
@@ -385,10 +493,13 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
       that share a slug) and team-slug collisions.</div>
   </div>
 
+  <div class="orgcontrols">Click an org to include or exclude it from the analysis below.
+    <b id="org-status"></b></div>
   <div class="cards">{org_cards}</div>
 
   {_html_project_section("Project collisions (Danger - projects share a slug)", "danger", report["project_collisions_HARD"])}
   {_html_team_section("Team slug collisions (Danger - slug must be unique)", "danger", report["team_slug_collisions_HARD"], "team slug")}
+{script}
 </body></html>
 """
 
