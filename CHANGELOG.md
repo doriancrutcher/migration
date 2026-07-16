@@ -99,6 +99,10 @@ type (see `ROADMAP.md`).
 - `--skip-issue-alerts` flag on `migrate_alert_rules.py` (metric-only behavior).
 - Results file now has separate `metric` and `issue` sections (`{migrated, failed}` each); the completion
   log reports both counts.
+- `tests/` **(new).** First hermetic unit tests (`tests/test_issue_alerts.py`, 15 cases) — stub `requests`,
+  run with plain `python3 -m unittest discover -s tests`, no network. Cover the issue-alert action defaulting,
+  owner-team mapping + IssueOwners fallback, condition/filter/env/frequency handling, endpoint, error paths,
+  dry-run, and the `--skip-issue-alerts` flag.
 
 ### Docs
 

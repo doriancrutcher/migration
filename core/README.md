@@ -5,6 +5,7 @@ They read a self-hosted **export** and POST to `https://sentry.io/api/0`; they d
 
 - **Dependencies:** `requests` (`pip install "requests>=2.31.0"`).
 - All five accept `--dry-run` (logs the exact method/URL/payload without calling the API). **Always dry-run first.**
+- **Tests:** `python3 -m unittest discover -s tests` (hermetic; see [`../tests/`](../tests/)).
 
 ## Run order (hard dependencies)
 
