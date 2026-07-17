@@ -132,7 +132,7 @@ class AlertRuleMigrator:
 
     def migrate_issue_alerts(self, data: List[Dict], org_slug: str,
                              project_slugs: Dict[int, str], team_map: Dict[str, str],
-                             env_index: Dict[int, str]):
+                             env_index: Dict[int, str], only_names=None):
         """Recreate sentry.rule issue alerts via the project rules endpoint."""
         migrated, failed = [], []
         for item in data:
@@ -141,6 +141,9 @@ class AlertRuleMigrator:
             pk = item.get("pk")
             fields = item.get("fields", {})
             name = fields.get("label")
+
+            if only_names is not None and name not in only_names:
+                continue
 
             project_slug = project_slugs.get(fields.get("project"))
             if not project_slug:
@@ -200,7 +203,7 @@ class AlertRuleMigrator:
         return team_mappings
 
     def migrate_alert_rules(self, export_file: str, org_slug: str, team_mappings_file: str,
-                            migrate_issue: bool = True):
+                            migrate_issue: bool = True, only_names=None):
         data = self.load_export_data(export_file)
         team_map = self.load_team_mappings(team_mappings_file)
 
@@ -219,6 +222,9 @@ class AlertRuleMigrator:
             pk = item.get("pk")
             fields = item.get("fields", {})
             name = fields.get("name")
+
+            if only_names is not None and name not in only_names:
+                continue
 
             snuba_id = fields.get("snuba_query")
             snuba = snuba_index.get(snuba_id, {})
@@ -281,7 +287,7 @@ class AlertRuleMigrator:
         issue_migrated, issue_failed = [], []
         if migrate_issue:
             issue_migrated, issue_failed = self.migrate_issue_alerts(
-                data, org_slug, project_slugs, team_map, env_index
+                data, org_slug, project_slugs, team_map, env_index, only_names
             )
 
         return {
@@ -299,15 +305,18 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Log intended API calls without sending them')
     parser.add_argument('--skip-issue-alerts', action='store_true',
                         help='Migrate metric alerts only (skip sentry.rule issue alerts)')
+    parser.add_argument('--only', action='append', metavar='NAME',
+                        help='Only migrate alerts whose name/label exactly matches (repeatable)')
     args = parser.parse_args()
 
     if args.dry_run:
         logger.info("=== DRY RUN: no changes will be made to SaaS ===")
 
+    only_names = set(args.only) if args.only else None
     migrator = AlertRuleMigrator(args.auth_token, dry_run=args.dry_run)
     results = migrator.migrate_alert_rules(
         args.export_file, args.org_slug, args.team_mappings_file,
-        migrate_issue=not args.skip_issue_alerts,
+        migrate_issue=not args.skip_issue_alerts, only_names=only_names,
     )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

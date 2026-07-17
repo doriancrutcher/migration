@@ -103,6 +103,19 @@ type (see `ROADMAP.md`).
   run with plain `python3 -m unittest discover -s tests`, no network. Cover the issue-alert action defaulting,
   owner-team mapping + IssueOwners fallback, condition/filter/env/frequency handling, endpoint, error paths,
   dry-run, and the `--skip-issue-alerts` flag.
+- `--only NAME` flag on `migrate_alert_rules.py` (repeatable). Migrates only the alerts (metric or issue)
+  whose name/label matches exactly — handy for surgical single-alert re-tests. When omitted, behavior is
+  unchanged (all alerts).
+
+### Added (experiments/ — Slack integration carry-over spike)
+
+- `experiments/slack_action_carryover.py` **(new, experimental).** Proves that an issue alert's **Slack
+  notification action can survive migration** when the same Slack workspace is already installed on the
+  destination SaaS org — instead of the default email substitution. It reads the alert + Slack action from
+  the export, looks up the destination Slack integration id via the live SaaS API, rewrites only the
+  instance-specific `workspace` field (keeping `channel`/`channel_id`), and POSTs the rule (polling SaaS's
+  async channel-validation task). Verified live end-to-end. Not wired into the supported toolkit yet; a
+  future `--preserve-integrations` flag on `migrate_alert_rules.py` would productionize it.
 
 ### Docs
 
