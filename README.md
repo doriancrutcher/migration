@@ -141,7 +141,15 @@ python3 project-settings/migrate_project_settings.py "$SAAS_TOKEN" "$DEST_ORG" \
 # 4c. Data scrubbers (org + project)  -> data_scrubbers_migration_results.json
 python3 data-scrubbers/migrate_data_scrubbers.py "$SAAS_TOKEN" "$DEST_ORG" \
   --source-token "$SH_TOKEN" --source-org "$SRC_ORG" --source-url "$SRC_URL"
+
+# 4d. Custom dashboards (widgets + queries)  -> dashboard_migration_results.json
+python3 dashboards/migrate_dashboards.py "$SAAS_TOKEN" "$DEST_ORG" \
+  --source-token "$SH_TOKEN" --source-org "$SRC_ORG" --source-url "$SRC_URL"
 ```
+
+Dashboards are live-API sourced (not in the export). The tool remaps project references by name and
+translates the deprecated `discover` widget dataset to `error-events` / `spans`; it skips prebuilt
+dashboards and any whose title already exists in SaaS. SaaS token needs `org:read` + `org:write`.
 
 ### Multi-org merge
 

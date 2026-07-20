@@ -103,7 +103,8 @@ Milestone: settings
 Milestone: content (all live-API sourced; depend on the reader)
 
 - `feat/monitors` -- Crons
-- `feat/dashboards` -- Dashboards
+- `feat/dashboards` -- Dashboards (DONE: custom dashboards + widgets, live-API sourced, project remap by
+  name, `discover`→`error-events`/`spans` dataset translation, verified live)
 - `feat/repos` -- Repositories (integration-gated)
 - `feat/saved-searches` -- Saved searches (recent/per-user searches are out of scope)
 
@@ -190,10 +191,15 @@ confirmed during each build.
 - Target: POST `/organizations/{org}/monitors/` (schedule, checkin_margin, max_runtime, timezone,
   project). Deps: projects. Script: `migrate_monitors.py`.
 
-### feat/dashboards (needs reader)
-- Source: live GET `/organizations/{org}/dashboards/` + per-dashboard widgets.
-- Target: POST `/organizations/{org}/dashboards/`; remap widget project refs via the phase-2 map.
-- Script: `migrate_dashboards.py`.
+### feat/dashboards (needs reader) — DONE
+- Source: live GET `/organizations/{org}/dashboards/` + per-dashboard widgets (custom only; prebuilt skipped).
+- Target: POST `/organizations/{org}/dashboards/`; remap dashboard `projects` + widget `project:`/`project.id:`
+  conditions via a name-matched source→dest project map.
+- Dataset translation: legacy `discover` widgets → `error-events`, or `spans` (with `is_transaction:true` /
+  `span.duration` rewrite) for transaction-oriented widgets, driven by real SaaS 400s.
+- Idempotent (skip-by-title), `--dry-run`, `--only`, GET-back verification, `dashboard_migration_results.json`.
+- Script: `dashboards/migrate_dashboards.py`. Seeder: `seed-data/seed_dashboards.py`. Tests:
+  `tests/test_dashboards.py`. Verified live into `dorian-v25-migration`.
 
 ### feat/repos (needs reader)
 - Source: live GET `/organizations/{org}/repos/`.

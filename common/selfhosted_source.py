@@ -68,3 +68,13 @@ class SelfHostedSource:
     def get_project(self, org_slug: str, project_slug: str) -> dict:
         """GET /projects/{org}/{project}/ -> detailed project (settings already in SaaS field names)."""
         return self.get(f"/projects/{org_slug}/{project_slug}/")
+
+    def get_dashboards(self, org_slug: str) -> list:
+        """GET /organizations/{slug}/dashboards/ -> all dashboards (paginated). The list payload is
+        lightweight (id, title, widgetDisplay, ...); use get_dashboard() for full widgets/queries.
+        Prebuilt dashboards appear with non-numeric string ids (e.g. 'default-overview')."""
+        return self.get_paginated(f"/organizations/{org_slug}/dashboards/")
+
+    def get_dashboard(self, org_slug: str, dashboard_id) -> dict:
+        """GET /organizations/{slug}/dashboards/{id}/ -> full dashboard with widgets and queries."""
+        return self.get(f"/organizations/{org_slug}/dashboards/{dashboard_id}/")
