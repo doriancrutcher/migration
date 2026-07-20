@@ -14,6 +14,8 @@ What counts as a hard blocker for a merged create (vs. informational):
     SaaS preserves it; slugs must be unique within a merged SaaS org, so two projects that share a slug
     clash. Detected on the ORIGINAL slug.
   - TEAM SLUG collision      -> DANGER. Teams are created with an explicit slug, which must be unique.
+    Collisions where the roster is IDENTICAL across the orgs are skipped (same slug + same people is
+    effectively one team, not a merge hazard); only same-slug/different-roster cases are flagged.
   - TEAM NAME collision      -> informational, but flagged with a MEMBERSHIP DIFF (same team name, but a
     different set of people in each org -- a real merge hazard).
   - SIMILAR ORG NAMES        -> informational (helps spot Dor-Org1 / Dor-Org2 / Dor-Org3 families).
@@ -344,7 +346,9 @@ def render_html(report: dict, exports: list, generated_at: str) -> str:
       });
       var b = tb.querySelector('.roster-badge');
       if (b) b.textContent = identical ? 'identical rosters' : 'DIFFERENT rosters';
-      tb.style.display = names.length >= 2 ? '' : 'none';
+      // Show only when >=2 selected orgs share the team AND their rosters differ (identical
+      // rosters are treated as the same team and skipped).
+      tb.style.display = (names.length >= 2 && !identical) ? '' : 'none';
     });
 
     updateCounts();
@@ -542,6 +546,9 @@ def main():
 
     proj_dups = project_collisions(orgs)
     team_slug_dups = team_collisions_with_membership(orgs, "slug")
+    # Skip team-slug collisions whose rosters are identical across the orgs: same slug + same people
+    # is effectively the same team, not a merge hazard worth flagging.
+    team_slug_dups = {k: v for k, v in team_slug_dups.items() if not v["identical_rosters"]}
     team_name_dups = team_collisions_with_membership(orgs, "name")
     similar = similar_org_names(orgs, args.similarity)
 
