@@ -11,6 +11,7 @@ export*.json
 member_id_mappings.json
 user_mappings_for_teams.json
 project_team_sync_results.json
+team_mappings*.json
 project_management_results.json
 team_member_assignments.json
 member_deletion_results.json

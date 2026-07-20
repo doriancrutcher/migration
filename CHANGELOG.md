@@ -89,6 +89,34 @@ previously raised `AttributeError` on non-HTTP exceptions and masked the real er
 Repo restructured around a `main` trunk with one `feat/<data-type>` branch + PR per remaining data
 type (see `ROADMAP.md`).
 
+### Added (feat/issue-alerts)
+
+- `migrate_alert_rules.py` now migrates **issue alerts** (`sentry.rule`) in addition to metric alerts,
+  POSTing to `/projects/{org}/{project}/rules/`. It carries over each rule's
+  `conditions`/`filters`/`actionMatch`/`filterMatch`/`frequency` and maps the environment name; the
+  notification **action is defaulted** to email the mapped owner team (`targetType:Team`), falling back to
+  `IssueOwners`/`ActiveMembers` when a rule has no owner team (see DECISIONS D9).
+- `--skip-issue-alerts` flag on `migrate_alert_rules.py` (metric-only behavior).
+- Results file now has separate `metric` and `issue` sections (`{migrated, failed}` each); the completion
+  log reports both counts.
+- `tests/` **(new).** First hermetic unit tests (`tests/test_issue_alerts.py`, 15 cases) — stub `requests`,
+  run with plain `python3 -m unittest discover -s tests`, no network. Cover the issue-alert action defaulting,
+  owner-team mapping + IssueOwners fallback, condition/filter/env/frequency handling, endpoint, error paths,
+  dry-run, and the `--skip-issue-alerts` flag.
+- `--only NAME` flag on `migrate_alert_rules.py` (repeatable). Migrates only the alerts (metric or issue)
+  whose name/label matches exactly — handy for surgical single-alert re-tests. When omitted, behavior is
+  unchanged (all alerts).
+
+### Added (experiments/ — Slack integration carry-over spike)
+
+- `experiments/slack_action_carryover.py` **(new, experimental).** Proves that an issue alert's **Slack
+  notification action can survive migration** when the same Slack workspace is already installed on the
+  destination SaaS org — instead of the default email substitution. It reads the alert + Slack action from
+  the export, looks up the destination Slack integration id via the live SaaS API, rewrites only the
+  instance-specific `workspace` field (keeping `channel`/`channel_id`), and POSTs the rule (polling SaaS's
+  async channel-validation task). Verified live end-to-end. Not wired into the supported toolkit yet; a
+  future `--preserve-integrations` flag on `migrate_alert_rules.py` would productionize it.
+
 ### Docs
 
 - Renamed the destination-org env var `ORG` -> `DEST_ORG` across the README and settings-folder READMEs, to

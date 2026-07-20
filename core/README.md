@@ -5,6 +5,7 @@ They read a self-hosted **export** and POST to `https://sentry.io/api/0`; they d
 
 - **Dependencies:** `requests` (`pip install "requests>=2.31.0"`).
 - All five accept `--dry-run` (logs the exact method/URL/payload without calling the API). **Always dry-run first.**
+- **Tests:** `python3 -m unittest discover -s tests` (hermetic; see [`../tests/`](../tests/)).
 
 ## Run order (hard dependencies)
 
@@ -53,9 +54,14 @@ step 3; alert rules map an `owner` team via the mappings from step 2.
   `/organizations/{org}/members/{member_id}/teams/{team_slug}/`. Writes `team_member_assignments.json`.
 
 ### 5. migrate_alert_rules.py
-- `python3 core/migrate_alert_rules.py <auth_token> <org_slug> <export.json> <project_team_sync_results.json> [--dry-run] [--only NAME]`
-- Reads `sentry.alertrule` (+ `snubaquery`, `alertruleprojects`, `alertruletrigger`, `snubaqueryeventtype`);
-  POSTs to `/organizations/{org}/alert-rules/`. Writes `alert_rule_migration_results_<timestamp>.json`.
-- Translates: project-slug mapping, `queryType` from the snuba type, `eventTypes` from `snubaqueryeventtype`,
-  `timeWindow` seconds→minutes, real trigger thresholds, owner → `team:<id>`, and a default email action
-  (SaaS rejects a trigger with no action). Issue alerts (`sentry.rule`) are detected and reported as skipped.
+- `python3 core/migrate_alert_rules.py <auth_token> <org_slug> <export.json> <project_team_sync_results.json> [--dry-run] [--skip-issue-alerts]`
+- Migrates **both** alert types (use `--skip-issue-alerts` for metric-only). Writes
+  `alert_rule_migration_results_<timestamp>.json` with separate `metric` and `issue` result sections.
+- **Metric alerts** (`sentry.alertrule`, + `snubaquery`, `alertruleprojects`, `alertruletrigger`,
+  `snubaqueryeventtype`) → POST `/organizations/{org}/alert-rules/`. Translates: project-slug mapping,
+  `queryType` from the snuba type, `eventTypes` from `snubaqueryeventtype`, `timeWindow` seconds→minutes,
+  real trigger thresholds, owner → `team:<id>`, and a default email action (SaaS rejects a trigger with no action).
+- **Issue alerts** (`sentry.rule`) → POST `/projects/{org}/{project}/rules/`. Carries over the rule's
+  `conditions`/`filters`/`actionMatch`/`filterMatch`/`frequency` and maps its environment name; the notification
+  **action is defaulted** to email the owner team (`targetType:Team`), falling back to `IssueOwners`/`ActiveMembers`
+  when the rule has no owner team (original notification actions aren't portable across instances).
