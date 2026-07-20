@@ -24,3 +24,6 @@ dryrun-out/
 
 # OS
 .DS_Store
+
+# Per-run console logs (may contain org data)
+*.log

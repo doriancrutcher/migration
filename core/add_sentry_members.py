@@ -325,5 +325,13 @@ def main():
         logger.error(f"Script execution failed: {str(e)}")
         sys.exit(1)
 
+
+import os as _rl_os, sys as _rl_sys
+_rl_sys.path.insert(0, _rl_os.path.join(_rl_os.path.dirname(_rl_os.path.abspath(__file__)), "..", "common"))
+_rl_sys.path.insert(0, _rl_os.path.join(_rl_os.path.dirname(_rl_os.path.abspath(__file__)), "common"))
+from run_logging import start_run_log
+
+
 if __name__ == "__main__":
-    main() 
+    start_run_log("add_sentry_members")
+    main()

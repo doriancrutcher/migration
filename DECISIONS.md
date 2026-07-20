@@ -4,6 +4,22 @@ A running record of scope/design choices made per feature -- especially things w
 deferred or excluded and may want to revisit. Newest first. Each entry: what was decided, why, and
 what would change it.
 
+## D9 - Export-only; org-level settings out of scope; scrubbers folded into project-settings
+- Feature: `feat/project-settings` (consolidation)
+- Decision: the settings migration is now **100% export-driven**. The live self-hosted reader
+  (`common/selfhosted_source.py`) and the two live-API tools (`org-settings/`, `data-scrubbers/`) were
+  **removed**. Project-level data scrubbers were **folded into `migrate_project_settings.py`** (they're
+  flat project-detail fields sourced from `sentry.projectoption`). **Org-level settings are out of scope.**
+- Why: the customer's migration is offline/export-based, so requiring a live self-hosted token + network
+  reachability for a few settings wasn't worth it. Org-level options (`sentry.organizationoption` — org
+  governance, org-level scrubbing defaults) aren't reliably carried by the relocation export, so they
+  can't be sourced offline; rather than keep a live-API path for org-level alone, org-level was dropped.
+- Consequences: one settings command instead of three; no `SH_TOKEN`/`--source-url` anywhere; the
+  export-only caveat applies (only non-default `projectoption` rows are present, so untouched settings stay
+  at the SaaS default). Supersedes the org-level parts of D3 and D5 and the tool split implied by D4.
+- Revisit if: org-level governance/scrubbing must be migrated (would need a re-introduced live reader or a
+  richer export), or advanced custom-PII is needed (still deferred per D5).
+
 ## D8 - Ship distinct, separately-run tools; no single orchestrating wizard
 - Feature: delivery model (affects `feat/wizard`, now dropped as the default path)
 - Decision: the toolkit is delivered as **distinct tools the operator runs one at a time, in a
