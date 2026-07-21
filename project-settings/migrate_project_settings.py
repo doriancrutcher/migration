@@ -290,11 +290,16 @@ def main():
     parser.add_argument("--source-org", default=None,
                         help="Optional: restrict to this org slug (for multi-org export files)")
     parser.add_argument("--saas-url", default="https://sentry.io/api/0", help="SaaS API base URL")
-    parser.add_argument("--dry-run", action="store_true", help="Log the intended PUTs without sending them")
+    parser.add_argument("--run_on_real_data", type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
+                        default=False, metavar="true|false",
+                        help="Set to true to actually perform changes. Default false = dry-run.")
+    parser.add_argument("--dry-run", action="store_true", dest="_dry_run_noop",
+                        help="(default) Dry-run is on by default; accepted for compatibility and is a no-op.")
     args = parser.parse_args()
+    args.dry_run = not args.run_on_real_data
 
     if args.dry_run:
-        logger.info("=== DRY RUN: no changes will be made to SaaS ===")
+        logger.info("=== DRY RUN (default): no changes will be made to SaaS. Pass --run_on_real_data=true to apply. ===")
 
     source = ExportSource(args.export_file)
     migrator = ProjectSettingsMigrator(args.auth_token, base_url=args.saas_url, dry_run=args.dry_run)

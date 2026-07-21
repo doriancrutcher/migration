@@ -261,9 +261,9 @@ def main():
     parser = argparse.ArgumentParser(description='Add or delete members from Sentry organization')
     parser.add_argument('auth_token', help='Sentry authentication token')
     parser.add_argument('org_slug', help='Destination SaaS organization slug')
+    parser.add_argument('export_file', nargs='?', help='JSON export file path (required unless --delete is used)')
     parser.add_argument('--source-org', help='Source org slug to migrate (required when the export holds multiple orgs)')
     parser.add_argument('--delete', help='Delete members using mappings file', metavar='MAPPINGS_FILE')
-    parser.add_argument('--export-file', help='Export JSON file path for adding members')
     parser.add_argument('--test', help='Test mode with Gmail alias (e.g., your.email@gmail.com)', metavar='EMAIL')
     parser.add_argument('--run_on_real_data', type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
                         default=False, metavar='true|false',
@@ -319,7 +319,7 @@ def main():
             logger.info(f"Wrote {out}  (pass {team_mappings_out} to assign_team_members.py)")
         
         else:
-            parser.error("Either --delete or --export-file must be specified")
+            parser.error("Provide a positional export_file to add members, or --delete MAPPINGS_FILE to delete")
             
     except Exception as e:
         logger.error(f"Script execution failed: {str(e)}")

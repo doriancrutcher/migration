@@ -27,7 +27,7 @@ DEFAULT_MODELS = [
     "sentry.user",                    # email, email_unique, username
     "sentry.useremail",               # email
     "sentry.email",                   # email
-    "sentry.organizationmember",      # email (invite) + user_email
+    # "sentry.organizationmember",      # email (invite) + user_email
     "sentry.organizationmemberinvite",  # email
     "sentry.authidentity",            # ident (SSO identity, ~always an email)
     # Config records that embed emails in generic text fields.
@@ -40,7 +40,7 @@ DEFAULT_MODELS = [
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 # Every email found in the kept records is replaced with this.
-DEFAULT_PLACEHOLDER = "myemail@example.com"
+DEFAULT_PLACEHOLDER = "chris.stavitsky@sentry.io"
 
 
 def scrub_emails(value, placeholder):

@@ -5,8 +5,9 @@ They read a self-hosted **export** and POST to `https://sentry.io/api/0`; they d
 
 - **Dependencies:** `requests` (`pip install "requests>=2.31.0"`).
 - **Dry-run is the DEFAULT.** Every script logs the exact method/URL/payload and makes no changes unless you
-  pass `--run_on_real_data=true`. (The old `--dry-run` flag is still accepted but is now a redundant no-op.)
-  **Always run once in dry-run first and read the output.**
+  pass `--run_on_real_data=true`. (`--dry-run` is accepted everywhere as an explicit no-op.) This matches the
+  `project-settings` tool, so every tool in the toolkit shares one convention: **dry by default,
+  `--run_on_real_data=true` to apply.** **Always run once in dry-run first and read the output.**
 - **One source org per run.** An export file may contain many orgs. Every script takes `--source-org <slug>`
   to select which source org's records to migrate, and will refuse to run on a multi-org export if it's omitted
   (it prints the available org slugs). Run the suite once per source org, in a deliberate order.
@@ -48,7 +49,7 @@ the user mappings from step 3; alert rules map an `owner` team via the mappings 
 - Writes `project_team_sync_results_<tag>.json` (includes `team_id_mappings`, consumed by the alert-rule script).
 
 ### 3. add_sentry_members.py
-- `python3 core/add_sentry_members.py <auth_token> <dest_org_slug> --export-file <export.json> --source-org <src_slug> [--test you@gmail.com] [--send-invite] [--run_on_real_data=true]`
+- `python3 core/add_sentry_members.py <auth_token> <dest_org_slug> <export.json> --source-org <src_slug> [--test you@gmail.com] [--send-invite] [--run_on_real_data=true]`
 - Delete mode: `python3 core/add_sentry_members.py <auth_token> <dest_org_slug> --delete <member_id_mappings_<tag>.json>`
 - Reads `sentry.organizationmember` (active users) for the source org; POSTs to `/organizations/{org}/members/` with `orgRole: "member"`.
 - Writes `member_id_mappings_<tag>.json` and `user_mappings_for_teams_<tag>.json` (used by step 4). Run step 4 for

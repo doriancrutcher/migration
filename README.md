@@ -2,7 +2,7 @@
 
 **This README is the master runbook.** The migration is performed by running the tools below **one at a
 time, in the order given** — there is deliberately **no single orchestrator script**. Each tool does one
-data type, is `--dry-run`-first, and writes its own results file that you review **before** running the next
+data type, **runs dry by default** (pass `--run_on_real_data=true` to apply), and writes its own results file that you review **before** running the next
 one. Do not skip ahead: later steps depend on files written by earlier ones, and the manual review between
 steps is the safety checkpoint against destructive writes (see [DECISIONS.md](DECISIONS.md) D8).
 
@@ -52,9 +52,10 @@ thing that varies by hosting is **how you produce the export (Step 0)**; see the
 
 ## Order of operations (run each step, review, then continue)
 
-Run every command from this directory. **Dry-run first** (append `--dry-run`), inspect the output, then
-re-run the same command without `--dry-run`. After each step, review the results file it writes before moving
-on. Each folder's own `README.md` has the full per-flag detail.
+Run every command from this directory. **Every tool runs dry by default** — run it as-is, inspect the
+output, then re-run the same command with **`--run_on_real_data=true`** to apply the changes to SaaS.
+(`--dry-run` is accepted everywhere as an explicit no-op if you like to be verbose.) After each step,
+review the results file it writes before moving on. Each folder's own `README.md` has the full per-flag detail.
 
 ### Step 0 — Produce the self-hosted export (one JSON per source org)
 
@@ -99,7 +100,8 @@ Then, in SaaS: confirm the destination org exists, and create a **team whose slu
 
 ### Step 3 — Core content (projects → teams → members → membership → alerts)
 
-Order is fixed by mapping-file dependencies. Dry-run each first.
+Order is fixed by mapping-file dependencies. Each command below runs **dry by default**; append
+**`--run_on_real_data=true`** to the same command to apply it once you've reviewed the dry-run output.
 
 ```bash
 # 3a. Projects  -> project_management_results.json
@@ -109,7 +111,7 @@ python3 core/create_sentry_projects.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT"
 python3 core/create_sentry_teams.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT"
 
 # 3c. Members  -> user_mappings_for_teams.json, member_id_mappings.json
-python3 core/add_sentry_members.py "$SAAS_TOKEN" "$DEST_ORG" --export-file "$EXPORT"
+python3 core/add_sentry_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT"
 
 # 3d. Team membership  -> team_member_assignments.json
 python3 core/assign_team_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" user_mappings_for_teams.json
@@ -117,6 +119,8 @@ python3 core/assign_team_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" user_map
 # 3e. Metric alerts  -> alert_rule_migration_results_<ts>.json
 python3 core/migrate_alert_rules.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" project_team_sync_results.json
 ```
+
+Add `--run_on_real_data=true` to any of these to actually write, e.g. `... create_sentry_projects.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" --run_on_real_data=true`.
 
 ### Step 4 — Project settings (export-driven)
 
@@ -126,8 +130,9 @@ and the five toggle inbound filters. Org-level settings are out of scope (see ab
 
 ```bash
 # 4. Per-project settings + scrubbers + inbound filters  -> project_settings_migration_results.json
+#    Dry by default; add --run_on_real_data=true to apply.
 python3 project-settings/migrate_project_settings.py "$SAAS_TOKEN" "$DEST_ORG" \
-  --export-file "$EXPORT" [--source-org "$SRC_ORG"]
+  --export-file "$EXPORT" [--source-org "$SRC_ORG"] [--run_on_real_data=true]
 ```
 
 ### Multi-org merge

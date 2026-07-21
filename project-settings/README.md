@@ -53,11 +53,12 @@ python3 project-settings/migrate_project_settings.py "$SAAS_TOKEN" "$DEST_ORG" \
     --export-file /path/to/export.json \
     [--source-org <slug>] \
     [--saas-url https://sentry.io/api/0] \
-    [--dry-run]
+    [--run_on_real_data=true]
 ```
 
-Always run `--dry-run` first (logs the intended `PUT`s without sending them). Output is formatted as
-aligned key/value blocks per project plus a summary table.
+**Runs dry by default** (logs the intended `PUT`s without sending them); add **`--run_on_real_data=true`** to apply.
+Review the dry-run output first. Output is formatted as aligned key/value blocks per project plus a
+summary table.
 
 **Multi-org exports:** an export file can contain several orgs (e.g. a consolidation). By default all
 projects across all orgs in the file are processed and matched by name into `$DEST_ORG`. Use
