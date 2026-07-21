@@ -87,6 +87,7 @@ class SentryTeamMemberManager:
             'successful': [],
             'failed': [],
             'skipped': [],
+            'skipped_other_org': [],  # membership rows whose team belongs to a different source org
             'team_mappings': defaultdict(list)
         }
 
@@ -124,21 +125,34 @@ class SentryTeamMemberManager:
                     # Skip if we don't have mappings for either user or team
                     if not user_pk or not team_pk:
                         continue
-                    
+
+                    # Scope to --source-org: team_slugs only holds this org's teams, so a team_pk
+                    # that's absent belongs to a different org in a multi-org export. Ignore it here
+                    # (it's migrated when that org is run) rather than mis-reporting it as a failed user.
+                    if team_pk not in team_slugs:
+                        results['skipped_other_org'].append({'user_pk': user_pk, 'team_pk': team_pk})
+                        continue
+
                     if user_pk not in successful_members:
+                        reason = 'User not successfully created in Sentry'
+                        logger.warning(f"  SKIP: organizationmember pk {user_pk} -> team pk {team_pk}: "
+                                       f"{reason} (not in the member mappings file)")
                         results['skipped'].append({
                             'user_pk': user_pk,
                             'team_pk': team_pk,
-                            'reason': 'User not successfully created in Sentry'
+                            'reason': reason
                         })
                         continue
 
                     team_slug = team_slugs.get(team_pk)
                     if not team_slug:
+                        reason = 'Team slug not found'
+                        logger.warning(f"  SKIP: organizationmember pk {user_pk} -> team pk {team_pk}: "
+                                       f"{reason} (team pk not among this org's exported teams)")
                         results['skipped'].append({
                             'user_pk': user_pk,
                             'team_pk': team_pk,
-                            'reason': 'Team slug not found'
+                            'reason': reason
                         })
                         continue
 
@@ -203,6 +217,13 @@ def main():
         logger.info(f"Successful assignments: {len(results['successful'])}")
         logger.info(f"Failed assignments: {len(results['failed'])}")
         logger.info(f"Skipped assignments: {len(results['skipped'])}")
+        if results['skipped']:
+            from collections import Counter as _Counter
+            for reason, count in _Counter(s['reason'] for s in results['skipped']).most_common():
+                logger.info(f"    - {count} skipped: {reason}")
+        if results['skipped_other_org']:
+            logger.info(f"Ignored (team belongs to another org, not --source-org): "
+                        f"{len(results['skipped_other_org'])}")
 
         # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
         tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"

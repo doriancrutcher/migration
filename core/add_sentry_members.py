@@ -106,8 +106,21 @@ class SentryMemberManager:
                     if not fields.get('user_is_active', False):
                         results['stats']['skipped'] += 1
                         continue
-                    
+
                     original_email = fields.get('user_email')
+                    # Members with no email can't be created (Sentry requires an email); skip with a
+                    # clear reason rather than letting the API reject them as a hard failure. This is
+                    # typically a never-accepted invite or a service/provisioned account.
+                    if not original_email:
+                        logger.warning(f"  SKIP: organizationmember pk {internal_id}: email is null in "
+                                       f"the export (likely a never-accepted invite or service account) "
+                                       f"-- cannot create member")
+                        results['stats']['skipped'] += 1
+                        results['id_mappings'].setdefault('skipped_no_email', {})[internal_id] = {
+                            'reason': 'email is null in export'
+                        }
+                        continue
+
                     email = self.generate_test_email(original_email, internal_id)
                     role = fields.get('role', 'member')
                     
@@ -310,7 +323,9 @@ def main():
             logger.info("Member sync completed:")
             logger.info(f"Added members: {results['stats']['added']}")
             logger.info(f"Failed additions: {results['stats']['failed']}")
-            logger.info(f"Skipped (inactive): {results['stats']['skipped']}")
+            no_email = len(results['id_mappings'].get('skipped_no_email', {}))
+            logger.info(f"Skipped (inactive or no email): {results['stats']['skipped']}"
+                        + (f" (of which {no_email} had no email)" if no_email else ""))
 
             # Write results to file
             out = f"member_id_mappings_{tag}.json"
