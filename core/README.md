@@ -14,6 +14,7 @@ They read a self-hosted **export** and POST to `https://sentry.io/api/0`; they d
 - **Outputs never overwrite.** Result/mapping files are tagged `<source-org>_<dest-org>_<timestamp>.json`; each
   script logs the exact path it wrote, and producers name the file to hand to the next step.
 - Null padding entries in the exports are skipped automatically.
+- **Tests:** `python3 -m unittest discover -s tests` (hermetic; see [`../tests/`](../tests/)).
 
 ## Run order (hard dependencies) — per source org
 
@@ -37,18 +38,21 @@ the user mappings from step 3; alert rules map an `owner` team via the mappings 
 ## Per-script detail (run from the repo root)
 
 ### 1. create_sentry_projects.py
+
 - `python3 core/create_sentry_projects.py <auth_token> <dest_org_slug> <export.json> --source-org <src_slug> [--delete] [--run_on_real_data=true]`
 - Reads `sentry.project` for the source org; POSTs `{name, slug, platform}` to `/teams/{org}/migration/projects/`.
   The original slug **is** sent, so SaaS preserves it. `--delete` removes by slug (handy for resetting a test org).
 - Writes `project_management_results_<tag>.json`.
 
 ### 2. create_sentry_teams.py
+
 - `python3 core/create_sentry_teams.py <auth_token> <dest_org_slug> <export.json> --source-org <src_slug> [--run_on_real_data=true]`
 - Reads `sentry.team`, `sentry.project`, `sentry.projectteam` for the source org; POSTs teams (with original slug)
   then attaches them to projects.
 - Writes `project_team_sync_results_<tag>.json` (includes `team_id_mappings`, consumed by the alert-rule script).
 
 ### 3. add_sentry_members.py
+
 - `python3 core/add_sentry_members.py <auth_token> <dest_org_slug> <export.json> --source-org <src_slug> [--test you@gmail.com] [--send-invite] [--run_on_real_data=true]`
 - Delete mode: `python3 core/add_sentry_members.py <auth_token> <dest_org_slug> --delete <member_id_mappings_<tag>.json>`
 - Reads `sentry.organizationmember` (active users) for the source org; POSTs to `/organizations/{org}/members/` with `orgRole: "member"`.
@@ -59,15 +63,21 @@ the user mappings from step 3; alert rules map an `owner` team via the mappings 
 - Limitation: role is hardcoded to `member`.
 
 ### 4. assign_team_members.py
+
 - `python3 core/assign_team_members.py <auth_token> <dest_org_slug> <export.json> <user_mappings_for_teams_<tag>.json> --source-org <src_slug> [--run_on_real_data=true]`
 - Reads `sentry.organizationmemberteam` (+ `sentry.team`) and the user mappings; POSTs
   `/organizations/{org}/members/{member_id}/teams/{team_slug}/`. Writes `team_member_assignments_<tag>.json`.
 
 ### 5. migrate_alert_rules.py
-- `python3 core/migrate_alert_rules.py <auth_token> <dest_org_slug> <export.json> <project_team_sync_results_<tag>.json> --source-org <src_slug> [--run_on_real_data=true]`
-- Reads `sentry.alertrule` (+ `snubaquery`, `alertruleprojects`, `alertruletrigger`, `snubaqueryeventtype`);
-  POSTs to `/organizations/{org}/alert-rules/`. Writes `alert_rule_migration_results_<tag>.json`.
-- Scoping is by project membership: rules whose projects belong to another org are skipped (`skipped_other_org`).
-- Translates: project-slug mapping, `queryType` from the snuba type, `eventTypes` from `snubaqueryeventtype`,
-  `timeWindow` seconds→minutes, real trigger thresholds, owner → `team:<id>`, and a default email action
-  (SaaS rejects a trigger with no action). Issue alerts (`sentry.rule`) are detected and reported as skipped.
+
+- `python3 core/migrate_alert_rules.py <auth_token> <org_slug> <export.json> <project_team_sync_results.json> [--dry-run] [--skip-issue-alerts]`
+- Migrates **both** alert types (use `--skip-issue-alerts` for metric-only). Writes
+  `alert_rule_migration_results_<timestamp>.json` with separate `metric` and `issue` result sections.
+- **Metric alerts** (`sentry.alertrule`, + `snubaquery`, `alertruleprojects`, `alertruletrigger`,
+  `snubaqueryeventtype`) → POST `/organizations/{org}/alert-rules/`. Translates: project-slug mapping,
+  `queryType` from the snuba type, `eventTypes` from `snubaqueryeventtype`, `timeWindow` seconds→minutes,
+  real trigger thresholds, owner → `team:<id>`, and a default email action (SaaS rejects a trigger with no action).
+- **Issue alerts** (`sentry.rule`) → POST `/projects/{org}/{project}/rules/`. Carries over the rule's
+  `conditions`/`filters`/`actionMatch`/`filterMatch`/`frequency` and maps its environment name; the notification
+  **action is defaulted** to email the owner team (`targetType:Team`), falling back to `IssueOwners`/`ActiveMembers`
+  when the rule has no owner team (original notification actions aren't portable across instances).

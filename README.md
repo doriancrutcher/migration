@@ -116,7 +116,7 @@ python3 core/add_sentry_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT"
 # 3d. Team membership  -> team_member_assignments.json
 python3 core/assign_team_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" user_mappings_for_teams.json
 
-# 3e. Metric alerts  -> alert_rule_migration_results_<ts>.json
+# 3e. Alerts (metric + issue)  -> alert_rule_migration_results_<ts>.json
 python3 core/migrate_alert_rules.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" project_team_sync_results.json
 ```
 
@@ -160,8 +160,8 @@ pip install "requests>=2.31.0"
 
 ## Known limitations (carried, flagged for review)
 
-- **Issue alerts** (`sentry.rule`) are not migrated — metric alerts only (different endpoint/schema).
-- **Alert notification actions** are not preserved; migrated rules get a default action only.
+- **Alert notification actions** are not preserved; migrated rules (metric and issue) get a default
+  email-the-owner-team action only (issue alerts fall back to `IssueOwners` when a rule has no owner team).
 - **Member roles** are flattened to `member` (integration-token invite limitation).
 - **Project slugs / DSNs change** because slug isn't sent on create (SaaS derives it from the name).
 - **Duplicate names across instances** must be resolved before a merged run (`preflight/duplicates_report.py`
