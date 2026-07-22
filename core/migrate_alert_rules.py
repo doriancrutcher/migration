@@ -361,14 +361,15 @@ def main():
         logger.info("=== EXECUTE: changes WILL be made to SaaS ===")
 
     only_names = set(args.only) if args.only else None
-    migrator = AlertRuleMigrator(args.auth_token, dry_run=args.dry_run)
+    migrator = AlertRuleMigrator(args.auth_token, dry_run=dry_run)
     results = migrator.migrate_alert_rules(
         args.export_file, args.org_slug, args.team_mappings_file,
-        migrate_issue=not args.skip_issue_alerts, only_names=only_names,
+        source_org=args.source_org, migrate_issue=not args.skip_issue_alerts, only_names=only_names,
     )
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    with open(f"alert_rule_migration_results_{timestamp}.json", 'w') as f:
+    # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
+    tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"
+    with open(f"alert_rule_migration_results_{tag}.json", 'w') as f:
         json.dump(results, f, indent=2)
 
     m, i = results["metric"], results["issue"]
