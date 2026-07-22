@@ -159,11 +159,73 @@ class AlertRuleMigrator:
             "fallthroughType": "ActiveMembers",
         }
 
+    def _port_issue_actions(self, source_actions, team_map, user_map, slack_integration_id,
+                            team_new_id, pd_account_map=None, pd_service_map=None):
+        """Re-create a rule's action list on SaaS, preserving every action and remapping the
+        instance-specific ids each one carries:
+          - email -> Team:        source team pk    -> mapped SaaS team id (team_map)
+          - email -> Member:      source user id    -> mapped SaaS user id (user_map)
+          - email -> IssueOwners: portable as-is
+          - Slack:                'workspace' (source integration id) -> slack_integration_id
+          - PagerDuty:            'account'/'service' -> mapped SaaS ids (pd_account_map/pd_service_map)
+        Actions whose id can't be resolved (no mapping given) are dropped and recorded rather than
+        sent with a stale id that would make SaaS reject the whole rule. If nothing survives, a
+        default owner-team/IssueOwners email is injected so the rule is still created.
+        Returns (actions, dropped) — dropped is a list of human-readable reasons.
+        """
+        pd_account_map = pd_account_map or {}
+        pd_service_map = pd_service_map or {}
+        ported, dropped = [], []
+        for a in source_actions or []:
+            aid = a.get("id", "")
+            out = {k: v for k, v in a.items() if k != "uuid"}  # SaaS assigns a fresh uuid
+            if aid.endswith("NotifyEmailAction"):
+                tt = a.get("targetType")
+                if tt == "Team":
+                    new = team_map.get(str(a.get("targetIdentifier")))
+                    if new is None:
+                        dropped.append(f"email->Team {a.get('targetIdentifier')} (no team mapping)")
+                        continue
+                    out["targetIdentifier"] = str(new)
+                elif tt == "Member":
+                    new = user_map.get(str(a.get("targetIdentifier"))) if user_map else None
+                    if new is None:
+                        dropped.append(f"email->Member {a.get('targetIdentifier')} (no user mapping)")
+                        continue
+                    out["targetIdentifier"] = str(new)
+                # IssueOwners (or any other targetType) has no id to remap
+                ported.append(out)
+            elif "slack" in aid.lower():
+                if not slack_integration_id:
+                    dropped.append(f"Slack {a.get('channel')} (no --slack-integration-id given)")
+                    continue
+                out["workspace"] = str(slack_integration_id)
+                ported.append(out)
+            elif "pagerduty" in aid.lower():
+                acct = pd_account_map.get(str(a.get("account")))
+                svc = pd_service_map.get(str(a.get("service")))
+                if acct is None or svc is None:
+                    missing = ([f"account {a.get('account')}"] if acct is None else []) + \
+                              ([f"service {a.get('service')}"] if svc is None else [])
+                    dropped.append(f"PagerDuty ({', '.join(missing)} unmapped)")
+                    continue
+                out["account"] = str(acct)
+                out["service"] = str(svc)
+                ported.append(out)
+            else:
+                # MS Teams / Opsgenie / webhook etc. — needs a SaaS-side id we weren't given
+                dropped.append(f"{aid.split('.')[-1]} (integration action, no SaaS mapping provided)")
+        if not ported:
+            ported = [self._default_issue_action(team_new_id)]
+        return ported, dropped
+
     def migrate_issue_alerts(self, data: List[Dict], org_slug: str,
                              project_slugs: Dict[int, str], team_map: Dict[str, str],
-                             env_index: Dict[int, str], only_names=None, source_pk=None):
+                             env_index: Dict[int, str], only_names=None, source_pk=None,
+                             user_map=None, slack_integration_id=None,
+                             pd_account_map=None, pd_service_map=None):
         """Recreate sentry.rule issue alerts via the project rules endpoint."""
-        migrated, failed, skipped_other_org = [], [], []
+        migrated, failed, skipped_other_org, dropped_actions = [], [], [], []
         for item in data:
             if not isinstance(item, dict) or item.get("model") != "sentry.rule":
                 continue
@@ -202,6 +264,14 @@ class AlertRuleMigrator:
 
             env_name = env_index.get(fields.get("environment_id")) if fields.get("environment_id") else None
 
+            actions, dropped = self._port_issue_actions(
+                blob.get("actions", []), team_map, user_map, slack_integration_id, team_new_id,
+                pd_account_map=pd_account_map, pd_service_map=pd_service_map)
+            if dropped:
+                dropped_actions.append({"pk": pk, "name": name, "dropped": dropped})
+                logger.warning(f"Issue alert {pk} '{name}': dropped {len(dropped)} unportable "
+                               f"action(s): {dropped}")
+
             payload = {
                 "name": name,
                 "actionMatch": blob.get("action_match", "any"),
@@ -210,7 +280,7 @@ class AlertRuleMigrator:
                 "environment": env_name,
                 "conditions": blob.get("conditions", []),
                 "filters": blob.get("filters", []),
-                "actions": [self._default_issue_action(team_new_id)],
+                "actions": actions,
             }
             if team_new_id is not None:
                 payload["owner"] = f"team:{team_new_id}"
@@ -222,7 +292,7 @@ class AlertRuleMigrator:
             except Exception as e:
                 failed.append((pk, str(e)))
                 logger.error(f"Failed to migrate issue alert {pk}: {e}")
-        return migrated, failed, skipped_other_org
+        return migrated, failed, skipped_other_org, dropped_actions
 
     def load_team_mappings(self, mappings_file: str) -> Dict[str, str]:
         """old team pk -> new SaaS team id, from project_team_sync_results.json."""
@@ -237,13 +307,24 @@ class AlertRuleMigrator:
         logger.info(f"Loaded {len(team_mappings)} team mappings")
         return team_mappings
 
+    def load_user_mappings(self, mappings_file: str) -> Dict[str, str]:
+        """old user id -> new SaaS user id, from user_mappings_for_teams.json (add_sentry_members)."""
+        with open(mappings_file, "r") as f:
+            data = json.load(f)
+        user_mappings = {str(k): str(v) for k, v in data.get("user_mappings", {}).items() if v}
+        logger.info(f"Loaded {len(user_mappings)} user mappings")
+        return user_mappings
+
     def migrate_alert_rules(self, export_file: str, org_slug: str, team_mappings_file: str,
-                            source_org: str = None, migrate_issue: bool = True, only_names=None):
+                            source_org: str = None, migrate_issue: bool = True, only_names=None,
+                            user_mappings_file: str = None, slack_integration_id=None,
+                            pd_account_map=None, pd_service_map=None):
         data = self.load_export_data(export_file)
         source_pk = self.resolve_source_org_pk(data, source_org)
         if source_pk is not None:
             logger.info(f"Filtering to source org '{source_org or '(only org in file)'}' (pk {source_pk})")
         team_map = self.load_team_mappings(team_mappings_file)
+        user_map = self.load_user_mappings(user_mappings_file) if user_mappings_file else {}
 
         snuba_index = self.build_snuba_index(data)
         event_types = self.build_event_types(data)
@@ -330,17 +411,21 @@ class AlertRuleMigrator:
                 failed_rules.append((pk, str(e)))
                 logger.error(f"Failed to migrate alert rule {pk}: {e}")
 
-        issue_migrated, issue_failed, issue_skipped_other_org = [], [], []
+        issue_migrated, issue_failed, issue_skipped_other_org, issue_dropped_actions = [], [], [], []
         if migrate_issue:
-            issue_migrated, issue_failed, issue_skipped_other_org = self.migrate_issue_alerts(
-                data, org_slug, project_slugs, team_map, env_index, only_names, source_pk=source_pk
-            )
+            issue_migrated, issue_failed, issue_skipped_other_org, issue_dropped_actions = \
+                self.migrate_issue_alerts(
+                    data, org_slug, project_slugs, team_map, env_index, only_names,
+                    source_pk=source_pk, user_map=user_map, slack_integration_id=slack_integration_id,
+                    pd_account_map=pd_account_map, pd_service_map=pd_service_map
+                )
 
         return {
             "metric": {"migrated": migrated_rules, "failed": failed_rules,
                        "skipped_other_org": skipped_other_org},
             "issue": {"migrated": issue_migrated, "failed": issue_failed,
-                      "skipped_other_org": issue_skipped_other_org},
+                      "skipped_other_org": issue_skipped_other_org,
+                      "dropped_actions": issue_dropped_actions},
         }
 
 
@@ -360,7 +445,32 @@ def main():
                         help='Migrate metric alerts only (skip sentry.rule issue alerts)')
     parser.add_argument('--only', action='append', metavar='NAME',
                         help='Only migrate alerts whose name/label exactly matches (repeatable)')
+    parser.add_argument('--slack-integration-id', metavar='ID',
+                        help="Destination SaaS Slack integration id. When set, issue-alert Slack "
+                             "actions are recreated with this integration (channel names/ids are "
+                             "kept as-is, so this assumes the same Slack workspace).")
+    parser.add_argument('--user-mappings', metavar='FILE',
+                        help='user_mappings_for_teams_<tag>.json from add_sentry_members.py. Used to '
+                             'remap member-targeted email actions on issue alerts.')
+    parser.add_argument('--pagerduty-account', action='append', metavar='SRC:DEST', default=[],
+                        help='Map a source PagerDuty account (integration) id to its SaaS id, e.g. '
+                             '--pagerduty-account 2:987. Repeatable.')
+    parser.add_argument('--pagerduty-service', action='append', metavar='SRC:DEST', default=[],
+                        help='Map a source PagerDuty service id to its SaaS id, e.g. '
+                             '--pagerduty-service 24:1055. Repeatable.')
     args = parser.parse_args()
+
+    def _parse_pairs(pairs, label):
+        out = {}
+        for p in pairs:
+            if ":" not in p:
+                parser.error(f"--{label} expects SRC:DEST, got '{p}'")
+            src, dest = p.split(":", 1)
+            out[src.strip()] = dest.strip()
+        return out
+
+    pd_account_map = _parse_pairs(args.pagerduty_account, "pagerduty-account")
+    pd_service_map = _parse_pairs(args.pagerduty_service, "pagerduty-service")
 
     dry_run = not args.run_on_real_data
     if dry_run:
@@ -373,6 +483,8 @@ def main():
     results = migrator.migrate_alert_rules(
         args.export_file, args.org_slug, args.team_mappings_file,
         source_org=args.source_org, migrate_issue=not args.skip_issue_alerts, only_names=only_names,
+        user_mappings_file=args.user_mappings, slack_integration_id=args.slack_integration_id,
+        pd_account_map=pd_account_map, pd_service_map=pd_service_map,
     )
 
     # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
@@ -385,7 +497,8 @@ def main():
         f"Completed. Metric alerts migrated: {len(m['migrated'])}, failed: {len(m['failed'])}, "
         f"skipped (other org): {len(m['skipped_other_org'])} | "
         f"Issue alerts migrated: {len(i['migrated'])}, failed: {len(i['failed'])}, "
-        f"skipped (other org): {len(i['skipped_other_org'])}"
+        f"skipped (other org): {len(i['skipped_other_org'])}, "
+        f"rules with dropped actions: {len(i['dropped_actions'])}"
     )
 
 
