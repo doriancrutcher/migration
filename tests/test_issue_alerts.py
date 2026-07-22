@@ -72,9 +72,11 @@ class IssueAlertMigrationTests(unittest.TestCase):
         self.team_map = {"50": "99123"}
         self.env_index = {1: "production"}
 
-    def _run(self, rules):
-        return self.m.migrate_issue_alerts(rules, "dest-org", self.project_slugs,
-                                           self.team_map, self.env_index)
+    def _run(self, rules, source_pk=None):
+        migrated, failed, _ = self.m.migrate_issue_alerts(
+            rules, "dest-org", self.project_slugs,
+            self.team_map, self.env_index, source_pk=source_pk)
+        return migrated, failed
 
     def _only_payload(self):
         self.assertEqual(len(_POSTS), 1, "expected exactly one POST")
@@ -165,11 +167,27 @@ class IssueAlertMigrationTests(unittest.TestCase):
     # ---- dry-run makes no network calls ----
     def test_dry_run_does_not_post(self):
         dry = mar.AlertRuleMigrator("tok", dry_run=True)
-        migrated, failed = dry.migrate_issue_alerts(
+        migrated, failed, _ = dry.migrate_issue_alerts(
             [make_rule(owner_team=50)], "dest-org", self.project_slugs,
             self.team_map, self.env_index)
         self.assertEqual((len(migrated), len(failed)), (1, 0))
         self.assertEqual(len(_POSTS), 0)
+
+    # ---- source-org scoping: other-org rules skipped, not failed ----
+    def test_other_org_rule_skipped_not_failed(self):
+        # project 999 is not in project_slugs; with source_pk set it is another org's rule.
+        migrated, failed, skipped = self.m.migrate_issue_alerts(
+            [make_rule(project=999)], "dest-org", self.project_slugs,
+            self.team_map, self.env_index, source_pk=4510189565050880)
+        self.assertEqual((len(migrated), len(failed), len(skipped)), (0, 0, 1))
+        self.assertEqual(len(_POSTS), 0)
+
+    def test_no_source_pk_keeps_failure_semantics(self):
+        # without source filtering, an unmapped project is still a failure (not skipped)
+        migrated, failed, skipped = self.m.migrate_issue_alerts(
+            [make_rule(project=999)], "dest-org", self.project_slugs,
+            self.team_map, self.env_index, source_pk=None)
+        self.assertEqual((len(migrated), len(failed), len(skipped)), (0, 1, 0))
 
 
 class MigrateAlertRulesIntegrationTests(unittest.TestCase):

@@ -88,7 +88,7 @@ class AlertRuleMigrator:
         """environment pk -> name (SaaS rules take an environment name or null)."""
         return {
             i["pk"]: i.get("fields", {}).get("name")
-            for i in data if i.get("model") == "sentry.environment"
+            for i in data if isinstance(i, dict) and i.get("model") == "sentry.environment"
         }
 
     def build_rule_projects(self, data: List[Dict]) -> Dict[int, List[int]]:
@@ -161,11 +161,11 @@ class AlertRuleMigrator:
 
     def migrate_issue_alerts(self, data: List[Dict], org_slug: str,
                              project_slugs: Dict[int, str], team_map: Dict[str, str],
-                             env_index: Dict[int, str], only_names=None):
+                             env_index: Dict[int, str], only_names=None, source_pk=None):
         """Recreate sentry.rule issue alerts via the project rules endpoint."""
-        migrated, failed = [], []
+        migrated, failed, skipped_other_org = [], [], []
         for item in data:
-            if item.get("model") != "sentry.rule":
+            if not isinstance(item, dict) or item.get("model") != "sentry.rule":
                 continue
             pk = item.get("pk")
             fields = item.get("fields", {})
@@ -174,10 +174,16 @@ class AlertRuleMigrator:
             if only_names is not None and name not in only_names:
                 continue
 
-            project_slug = project_slugs.get(fields.get("project"))
+            project_pk = fields.get("project")
+            # project_slugs is scoped to the source org; a rule whose project isn't in scope
+            # belongs to another org -- skip it (don't count it as a failure).
+            if source_pk is not None and project_pk not in project_slugs:
+                skipped_other_org.append({"pk": pk, "name": name, "reason": "Rule belongs to another org"})
+                continue
+            project_slug = project_slugs.get(project_pk)
             if not project_slug:
                 failed.append((pk, "No project mapping found for issue alert"))
-                logger.error(f"Issue alert {pk}: no project slug for project pk {fields.get('project')}")
+                logger.error(f"Issue alert {pk}: no project slug for project pk {project_pk}")
                 continue
 
             raw = fields.get("data")
@@ -216,7 +222,7 @@ class AlertRuleMigrator:
             except Exception as e:
                 failed.append((pk, str(e)))
                 logger.error(f"Failed to migrate issue alert {pk}: {e}")
-        return migrated, failed
+        return migrated, failed, skipped_other_org
 
     def load_team_mappings(self, mappings_file: str) -> Dict[str, str]:
         """old team pk -> new SaaS team id, from project_team_sync_results.json."""
@@ -247,7 +253,7 @@ class AlertRuleMigrator:
         rule_triggers = self.build_rule_triggers(data)
         env_index = self.build_environments(data)
 
-        migrated_rules, failed_rules = [], []
+        migrated_rules, failed_rules, skipped_other_org = [], [], []
 
         for item in data:
             if not isinstance(item, dict) or item.get("model") != "sentry.alertrule":
@@ -324,15 +330,17 @@ class AlertRuleMigrator:
                 failed_rules.append((pk, str(e)))
                 logger.error(f"Failed to migrate alert rule {pk}: {e}")
 
-        issue_migrated, issue_failed = [], []
+        issue_migrated, issue_failed, issue_skipped_other_org = [], [], []
         if migrate_issue:
-            issue_migrated, issue_failed = self.migrate_issue_alerts(
-                data, org_slug, project_slugs, team_map, env_index, only_names
+            issue_migrated, issue_failed, issue_skipped_other_org = self.migrate_issue_alerts(
+                data, org_slug, project_slugs, team_map, env_index, only_names, source_pk=source_pk
             )
 
         return {
-            "metric": {"migrated": migrated_rules, "failed": failed_rules},
-            "issue": {"migrated": issue_migrated, "failed": issue_failed},
+            "metric": {"migrated": migrated_rules, "failed": failed_rules,
+                       "skipped_other_org": skipped_other_org},
+            "issue": {"migrated": issue_migrated, "failed": issue_failed,
+                      "skipped_other_org": issue_skipped_other_org},
         }
 
 
@@ -374,9 +382,17 @@ def main():
 
     m, i = results["metric"], results["issue"]
     logger.info(
-        f"Completed. Metric alerts migrated: {len(m['migrated'])}, failed: {len(m['failed'])} | "
-        f"Issue alerts migrated: {len(i['migrated'])}, failed: {len(i['failed'])}"
+        f"Completed. Metric alerts migrated: {len(m['migrated'])}, failed: {len(m['failed'])}, "
+        f"skipped (other org): {len(m['skipped_other_org'])} | "
+        f"Issue alerts migrated: {len(i['migrated'])}, failed: {len(i['failed'])}, "
+        f"skipped (other org): {len(i['skipped_other_org'])}"
     )
+
+
+import os as _rl_os, sys as _rl_sys
+_rl_sys.path.insert(0, _rl_os.path.join(_rl_os.path.dirname(_rl_os.path.abspath(__file__)), "..", "common"))
+_rl_sys.path.insert(0, _rl_os.path.join(_rl_os.path.dirname(_rl_os.path.abspath(__file__)), "common"))
+from run_logging import start_run_log
 
 
 if __name__ == "__main__":
