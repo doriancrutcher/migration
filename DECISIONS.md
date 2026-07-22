@@ -4,6 +4,25 @@ A running record of scope/design choices made per feature -- especially things w
 deferred or excluded and may want to revisit. Newest first. Each entry: what was decided, why, and
 what would change it.
 
+## D10 - Dashboards: recreate custom dashboards, translate deprecated widget datasets
+- Feature: `feat/dashboards`
+- Decision: migrate **custom** dashboards only (prebuilt like `default-overview` are skipped). Source is the
+  **live self-hosted API** (dashboards aren't in the relocation export). Project references are matched **by
+  name** (reusing D4's greenfield assumption) to remap the dashboard `projects` list and `project:`/
+  `project.id:` tokens in widget conditions. Legacy `discover` widgets are translated to the datasets current
+  SaaS accepts: `error-events`, or `spans` for transaction-oriented widgets (rewriting
+  `event.type:transaction` → `is_transaction:true` and `transaction.duration` → `span.duration`).
+  Idempotency = **skip-by-title**; ownership resets to the token's user.
+- Why: SaaS rejects the deprecated `discover` (and now `transactions`) datasets with a `400`, so a pass-through
+  copy fails; the translation was derived from the actual API errors seen during the live test. Name-based
+  project matching keeps parity with the other tools. Skip-by-title makes re-runs safe and additive.
+- Supervisor-review flag: **low** — dashboards are additive/non-destructive (a new dashboard is created; nothing
+  existing is overwritten or deleted). Still worth noting because the dataset translation can subtly change what
+  a transaction widget queries (`transaction.duration` → `span.duration`).
+- Revisit if: the customer uses widget fields beyond `transaction.duration` that need span-dataset equivalents,
+  wants dashboard ownership preserved, or wants prebuilt-dashboard customizations carried over. Residual `400`s
+  are captured per-dashboard in `dashboard_migration_results.json` to drive any further field mapping.
+
 ## D9 - Issue alerts migrated; notification action defaulted to the owner team (supersedes D1)
 - Feature: `feat/issue-alerts`
 - Decision: migrate issue alerts (`sentry.rule`) alongside metric alerts via

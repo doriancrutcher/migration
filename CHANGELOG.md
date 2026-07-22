@@ -107,6 +107,31 @@ type (see `ROADMAP.md`).
   whose name/label matches exactly — handy for surgical single-alert re-tests. When omitted, behavior is
   unchanged (all alerts).
 
+### Added (feat/dashboards)
+
+- `dashboards/migrate_dashboards.py` **(new).** Recreates **custom dashboards** (widgets, queries, layout)
+  from a live self-hosted org into SaaS. Dashboards are **not** in the relocation export, so the source is
+  the live self-hosted REST API (via `common/selfhosted_source.py`) — same pattern as the settings tools.
+  Prebuilt dashboards (non-numeric ids like `default-overview`) are skipped and reported.
+- `common/selfhosted_source.py`: added `get_dashboards()` and `get_dashboard()` GET-only helpers.
+- **Project remap by name** (greenfield, like `project-settings`): builds source→dest id and slug maps and
+  rewrites the dashboard-level `projects` list plus `project:<slug>`/`project.id:<id>` tokens in widget query
+  conditions. Unmappable refs are recorded, never silently dropped.
+- **Dataset/`widgetType` translation** (driven by real SaaS `400`s): current SaaS rejects the legacy
+  `discover` dataset, so each `discover` widget is classified from its query — transaction-oriented →
+  `spans` (rewriting `event.type:transaction` → `is_transaction:true` and `transaction.duration` →
+  `span.duration`), else `error-events`. `issue`/other current types pass through. Translations are logged
+  and recorded in the results file. Unresolved `400`s are captured per-dashboard instead of aborting.
+- **Idempotent** (skip by title), `--dry-run`, `--only "<title>"` (repeatable), and post-create verification
+  (GET-back widget count + titles). Writes `dashboard_migration_results.json`.
+- `seed-data/seed_dashboards.py` **(new).** Seeds one custom dashboard with mixed widget types (big number,
+  time series, issue table, transaction) to exercise the migration end-to-end.
+- `tests/test_dashboards.py` **(new, 24 cases).** Hermetic — project-id/slug remap, condition rewrite,
+  widget payload shaping, `discover`→`error-events`/`spans` translation (incl. field/condition rewrite),
+  prebuilt filtering, dry-run, verify mismatch/pass, and POST error paths.
+- Verified live end-to-end into `dorian-v25-migration` (4-widget dashboard created, verify passed,
+  re-run correctly skips).
+
 ### Added (experiments/ — Slack integration carry-over spike)
 
 - `experiments/slack_action_carryover.py` **(new, experimental).** Proves that an issue alert's **Slack

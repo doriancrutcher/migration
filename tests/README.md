@@ -24,3 +24,12 @@ python3 -m unittest discover -s tests
     **not** POST;
   - `--dry-run` sends nothing; the top-level result has separate `metric` / `issue`
     sections and `--skip-issue-alerts` skips issue alerts.
+- `test_dashboards.py` — dashboard migration in `dashboards/migrate_dashboards.py`:
+  - source→dest project id/slug map by **name**; unmatched sources omitted;
+  - `project:` / `project.id:` token rewrite in widget conditions; unmapped refs recorded, not dropped;
+  - widget payload shaping (only whitelisted widget/query fields forwarded);
+  - `discover` → `error-events` / `spans` translation, incl. `event.type:transaction` →
+    `is_transaction:true` and `transaction.duration` → `span.duration`; `issue` passes through;
+  - dashboard-level `projects` remap (all-projects `-1` passthrough; unmapped recorded), `filters` passthrough;
+  - prebuilt (non-numeric id) detection, `--dry-run` sends nothing, POST error surfaced as `RuntimeError`,
+    and `verify()` flags widget count/title mismatches.
