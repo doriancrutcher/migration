@@ -1,6 +1,7 @@
 import json
 import logging
 import argparse
+import re
 import requests
 from typing import Dict, List
 from datetime import datetime
@@ -18,6 +19,21 @@ logger = logging.getLogger(__name__)
 
 # SnubaQueryEventType.EventType -> API eventTypes string
 EVENT_TYPE_MAP = {0: "error", 1: "default", 2: "transaction"}
+
+# --- Transaction -> span (EAP) metric-alert translation ------------------------------------
+# SaaS has disabled creating transaction-dataset metric alerts; they must be recreated on the
+# span dataset (events_analytics_platform) with an is_transaction:true filter.
+#
+# Translation rules confirmed against the Sentry source (src/sentry/search/eap/spans/ and
+# src/sentry/snuba/*): the span dataset supports duration percentile aggregates on span.duration,
+# count(span.duration), and failure_rate() (identical failure definition: sentry.status NOT IN
+# ok/cancelled/unknown). Span search accepts the same `transaction:` and `tags[key]:` filters, plus
+# `is_transaction:true`. Event type must be exactly ["trace_item_span"] and query_type = 1.
+# We translate every aggregate with a confirmed span equivalent and only flag ones without one
+# (web-vital measurements, custom percentile(), percentage(), etc.).
+SPAN_DATASET = "events_analytics_platform"
+TRANSACTION_DATASETS = ("transactions", "generic_metrics")
+_DURATION_AGG = re.compile(r"^(avg|p50|p75|p90|p95|p99|p100)\(transaction\.duration\)$")
 
 
 class AlertRuleMigrator:
@@ -160,7 +176,8 @@ class AlertRuleMigrator:
         }
 
     def _port_issue_actions(self, source_actions, team_map, user_map, slack_integration_id,
-                            team_new_id, pd_account_map=None, pd_service_map=None):
+                            team_new_id, pd_account_map=None, pd_service_map=None,
+                            rebind_channel=False):
         """Re-create a rule's action list on SaaS, preserving every action and remapping the
         instance-specific ids each one carries:
           - email -> Team:        source team pk    -> mapped SaaS team id (team_map)
@@ -200,6 +217,10 @@ class AlertRuleMigrator:
                     dropped.append(f"Slack {a.get('channel')} (no --slack-integration-id given)")
                     continue
                 out["workspace"] = str(slack_integration_id)
+                if rebind_channel:
+                    # Cross-workspace migration: source channel_id is invalid in the destination
+                    # workspace, so drop it and let SaaS resolve by channel name instead.
+                    out.pop("channel_id", None)
                 ported.append(out)
             elif "pagerduty" in aid.lower():
                 acct = pd_account_map.get(str(a.get("account")))
@@ -223,9 +244,12 @@ class AlertRuleMigrator:
                              project_slugs: Dict[int, str], team_map: Dict[str, str],
                              env_index: Dict[int, str], only_names=None, source_pk=None,
                              user_map=None, slack_integration_id=None,
-                             pd_account_map=None, pd_service_map=None):
+                             pd_account_map=None, pd_service_map=None, rebind_channel=False,
+                             skip_project_slugs=None):
         """Recreate sentry.rule issue alerts via the project rules endpoint."""
+        skip_project_slugs = set(skip_project_slugs or [])
         migrated, failed, skipped_other_org, dropped_actions = [], [], [], []
+        skipped_existing_project = []
         for item in data:
             if not isinstance(item, dict) or item.get("model") != "sentry.rule":
                 continue
@@ -247,6 +271,12 @@ class AlertRuleMigrator:
                 failed.append((pk, "No project mapping found for issue alert"))
                 logger.error(f"Issue alert {pk}: no project slug for project pk {project_pk}")
                 continue
+            # Merge mode: skip alerts on a project that already exists from a prior instance so we
+            # don't pile this instance's alerts onto the existing (first-instance) project.
+            if project_slug in skip_project_slugs:
+                skipped_existing_project.append({"pk": pk, "name": name, "project": project_slug})
+                logger.info(f"Issue alert {pk} '{name}': skipped (project '{project_slug}' already exists — merge collision)")
+                continue
 
             raw = fields.get("data")
             try:
@@ -266,20 +296,31 @@ class AlertRuleMigrator:
 
             actions, dropped = self._port_issue_actions(
                 blob.get("actions", []), team_map, user_map, slack_integration_id, team_new_id,
-                pd_account_map=pd_account_map, pd_service_map=pd_service_map)
+                pd_account_map=pd_account_map, pd_service_map=pd_service_map,
+                rebind_channel=rebind_channel)
             if dropped:
                 dropped_actions.append({"pk": pk, "name": name, "dropped": dropped})
                 logger.warning(f"Issue alert {pk} '{name}': dropped {len(dropped)} unportable "
                                f"action(s): {dropped}")
 
+            # Self-hosted stores condition AND filter nodes together in `conditions`; SaaS's API
+            # wants them in SEPARATE fields and rejects a `sentry.rules.filters.*` node submitted
+            # under `conditions`. Partition by node id: filter nodes -> filters, the rest -> conditions.
+            raw_conditions = blob.get("conditions", []) or []
+            raw_filters = blob.get("filters", []) or []
+            split_conditions = [c for c in raw_conditions if ".filters." not in (c.get("id") or "")]
+            split_filters = raw_filters + [c for c in raw_conditions if ".filters." in (c.get("id") or "")]
+
             payload = {
                 "name": name,
                 "actionMatch": blob.get("action_match", "any"),
-                "filterMatch": blob.get("filter_match", "all"),
+                # filter_match may be present-but-null in the export (rules with no filters); SaaS
+                # rejects null, so coerce to "all" (harmless with an empty filter list).
+                "filterMatch": blob.get("filter_match") or "all",
                 "frequency": blob.get("frequency", 30),
                 "environment": env_name,
-                "conditions": blob.get("conditions", []),
-                "filters": blob.get("filters", []),
+                "conditions": split_conditions,
+                "filters": split_filters,
                 "actions": actions,
             }
             if team_new_id is not None:
@@ -292,7 +333,7 @@ class AlertRuleMigrator:
             except Exception as e:
                 failed.append((pk, str(e)))
                 logger.error(f"Failed to migrate issue alert {pk}: {e}")
-        return migrated, failed, skipped_other_org, dropped_actions
+        return migrated, failed, skipped_other_org, dropped_actions, skipped_existing_project
 
     def load_team_mappings(self, mappings_file: str) -> Dict[str, str]:
         """old team pk -> new SaaS team id, from project_team_sync_results.json."""
@@ -315,10 +356,70 @@ class AlertRuleMigrator:
         logger.info(f"Loaded {len(user_mappings)} user mappings")
         return user_mappings
 
+    def _slack_issue_alerts_in_scope(self, data, project_slugs, source_pk, only_names):
+        """Return the names of in-scope issue alerts (sentry.rule) that notify Slack.
+
+        Mirrors the filtering in migrate_issue_alerts (--only and --source-org scope) so the
+        result reflects exactly what THIS run would migrate, not the whole export file.
+        """
+        hits = []
+        for item in data:
+            if not isinstance(item, dict) or item.get("model") != "sentry.rule":
+                continue
+            fields = item.get("fields", {})
+            name = fields.get("label")
+            if only_names is not None and name not in only_names:
+                continue
+            if source_pk is not None and fields.get("project") not in project_slugs:
+                continue
+            raw = fields.get("data")
+            try:
+                blob = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except (ValueError, TypeError):
+                continue
+            if any("slack" in (a.get("id") or "").lower() for a in (blob.get("actions") or [])):
+                hits.append(name)
+        return hits
+
+    @staticmethod
+    def translate_transaction_snuba(snuba):
+        """Translate a transaction/generic_metrics metric-alert query to the span (EAP) dataset.
+
+        Returns (overrides, None) when the alert can be translated, where `overrides` is a dict of
+        payload fields to replace. Returns (None, reason) to FLAG an alert that has no confirmed
+        span-dataset equivalent (web-vital measurements, custom percentile(), percentage(), etc.).
+
+        Confirmed against Sentry source: duration percentiles map transaction.duration->span.duration,
+        count()->count(span.duration), and failure_rate() is valid as-is on spans (same failure
+        definition). The existing query filters (transaction:, tags[...]) are valid span-search
+        syntax and are carried over verbatim; we just add is_transaction:true to scope to transactions.
+        """
+        agg = (snuba.get("aggregate") or "").strip()
+        query = (snuba.get("query") or "").strip()
+        if _DURATION_AGG.match(agg):
+            new_agg = agg.replace("transaction.duration", "span.duration")
+        elif agg == "count()":
+            new_agg = "count(span.duration)"
+        elif agg == "failure_rate()":
+            new_agg = "failure_rate()"  # valid span formula; identical failure semantics
+        else:
+            return None, f"aggregate has no confirmed span-dataset equivalent: {agg!r}"
+        # Span search supports transaction:/tags[...] as-is; scope to transaction-segment spans.
+        new_query = "is_transaction:true" if not query else f"{query} is_transaction:true"
+        return {
+            "dataset": SPAN_DATASET,
+            "aggregate": new_agg,
+            "query": new_query,
+            "queryType": 1,
+            "eventTypes": ["trace_item_span"],
+        }, None
+
     def migrate_alert_rules(self, export_file: str, org_slug: str, team_mappings_file: str,
                             source_org: str = None, migrate_issue: bool = True, only_names=None,
                             user_mappings_file: str = None, slack_integration_id=None,
-                            pd_account_map=None, pd_service_map=None):
+                            pd_account_map=None, pd_service_map=None,
+                            override_slack_with_email: bool = False, rebind_channel: bool = False,
+                            skip_project_slugs=None):
         data = self.load_export_data(export_file)
         source_pk = self.resolve_source_org_pk(data, source_org)
         if source_pk is not None:
@@ -330,11 +431,31 @@ class AlertRuleMigrator:
         event_types = self.build_event_types(data)
         # project_slugs is scoped to the source org; rules whose projects are all outside it are skipped.
         project_slugs = self.build_project_slugs(data, source_pk=source_pk)
+
+        # Guard: if any in-scope issue alert notifies Slack, refuse to run unless the caller either
+        # supplies a Slack integration id (to preserve those actions) or explicitly opts in to
+        # replacing them with the default owner-team email. Enforced in dry-run AND live so it fails
+        # fast. Only relevant when issue alerts are being migrated (Slack actions live on them).
+        if migrate_issue and not slack_integration_id and not override_slack_with_email:
+            slack_alerts = self._slack_issue_alerts_in_scope(data, project_slugs, source_pk, only_names)
+            if slack_alerts:
+                sample = ", ".join(sorted(set(slack_alerts))[:5])
+                more = "" if len(set(slack_alerts)) <= 5 else f", +{len(set(slack_alerts)) - 5} more"
+                raise SystemExit(
+                    f"ERROR: {len(slack_alerts)} issue alert(s) in scope send Slack notifications "
+                    f"(e.g. {sample}{more}).\n"
+                    f"Re-run with --slack-integration-id <id> to preserve the Slack actions, or "
+                    f"--override_slack_notifications_with_email=true to replace them with the default "
+                    f"owner-team email."
+                )
+
         rule_projects = self.build_rule_projects(data)
         rule_triggers = self.build_rule_triggers(data)
         env_index = self.build_environments(data)
 
-        migrated_rules, failed_rules, skipped_other_org = [], [], []
+        skip_project_slugs = set(skip_project_slugs or [])
+        migrated_rules, failed_rules, skipped_other_org, flagged_transaction = [], [], [], []
+        skipped_existing_project = []
 
         for item in data:
             if not isinstance(item, dict) or item.get("model") != "sentry.alertrule":
@@ -365,12 +486,28 @@ class AlertRuleMigrator:
             if not projects:
                 failed_rules.append((pk, "No project mapping found (alertruleprojects empty)"))
                 continue
+            # Merge mode: don't attach a metric alert to a project that already exists from a prior
+            # instance (first instance wins). Drop colliding projects; skip the rule if none remain.
+            if skip_project_slugs:
+                kept = [s for s in projects if s not in skip_project_slugs]
+                if not kept:
+                    skipped_existing_project.append({"pk": pk, "name": name, "projects": projects})
+                    logger.info(f"Alert rule {pk} '{name}': skipped (project(s) already exist — merge collision)")
+                    continue
+                projects = kept
 
-            # owner: map source team pk -> new SaaS team id
+            # owner: map source team pk -> new SaaS team id (or user_id -> new SaaS user id)
             team_pk = fields.get("team")
             team_new_id = team_map.get(str(team_pk)) if team_pk is not None else None
             if team_pk is not None and team_new_id is None:
                 logger.warning(f"Alert rule {pk}: no team mapping for owner team pk {team_pk}; creating without owner")
+            # Some metric alerts are owned by a USER, not a team. Resolve via user mappings so the
+            # default action gets a real target instead of null (SaaS rejects a null targetIdentifier).
+            user_pk = fields.get("user_id")
+            user_new_id = user_map.get(str(user_pk)) if (user_pk is not None and user_map) else None
+            if team_new_id is None and user_pk is not None and user_new_id is None:
+                logger.warning(f"Alert rule {pk}: user-owned (user_id {user_pk}) but no user mapping; "
+                               f"pass --user-mappings so its default action has a valid target")
 
             # triggers: real thresholds from alertruletrigger (fallback to a critical trigger)
             triggers = rule_triggers.get(pk) or [{"label": "critical", "alertThreshold": 100, "actions": []}]
@@ -380,20 +517,52 @@ class AlertRuleMigrator:
             # email-to-owner-team action to satisfy the API. Flag for review.
             if team_new_id is not None:
                 default_action = {"type": "email", "targetType": "team", "targetIdentifier": str(team_new_id)}
+            elif user_new_id is not None:
+                default_action = {"type": "email", "targetType": "user", "targetIdentifier": str(user_new_id)}
             else:
                 default_action = {"type": "email", "targetType": "user", "targetIdentifier": None}
             for t in triggers:
                 if not t.get("actions"):
                     t["actions"] = [default_action]
 
+            # Effective query fields — start from the source snuba query.
+            eff_dataset = snuba.get("dataset", "events")
+            eff_query = snuba.get("query", "")
+            eff_aggregate = snuba.get("aggregate", "count()")
+            eff_query_type = snuba.get("type", 0)
+            eff_event_types = event_types.get(snuba_id, ["error"])
+
+            # Transaction-based metric alerts can no longer be created on SaaS — translate the clean
+            # cases to the span (EAP) dataset, and flag the rest (failure_rate/filtered) for manual rebuild.
+            if eff_dataset in TRANSACTION_DATASETS:
+                overrides, reason = self.translate_transaction_snuba(snuba)
+                if overrides is None:
+                    flagged_transaction.append({"pk": pk, "name": name, "aggregate": snuba.get("aggregate"),
+                                                "query": snuba.get("query"), "reason": reason})
+                    logger.warning(f"Alert rule {pk} '{name}': transaction-based, flagged for MANUAL span "
+                                   f"rebuild ({reason})")
+                    continue
+                logger.info(f"Alert rule {pk} '{name}': translated transaction->span "
+                            f"({snuba.get('aggregate')} on {snuba.get('dataset')} -> {overrides['aggregate']} "
+                            f"on {overrides['dataset']}, +is_transaction:true) — VERIFY on a dry run")
+                eff_dataset = overrides["dataset"]; eff_query = overrides["query"]
+                eff_aggregate = overrides["aggregate"]; eff_query_type = overrides["queryType"]
+                eff_event_types = overrides["eventTypes"]
+
+            # Any span/EAP alert (translated OR already native) must use span event types; the source
+            # event-type codes don't map to valid EAP values (that's why native EAP alerts failed before).
+            if eff_dataset == SPAN_DATASET:
+                eff_event_types = ["trace_item_span"]
+                eff_query_type = 1
+
             payload = {
                 "name": name,
-                "dataset": snuba.get("dataset", "events"),
-                "query": snuba.get("query", ""),
-                "aggregate": snuba.get("aggregate", "count()"),
+                "dataset": eff_dataset,
+                "query": eff_query,
+                "aggregate": eff_aggregate,
                 "timeWindow": snuba.get("time_window", 3600) // 60 if isinstance(snuba.get("time_window"), int) else 60,
-                "queryType": snuba.get("type", 0),
-                "eventTypes": event_types.get(snuba_id, ["error"]),
+                "queryType": eff_query_type,
+                "eventTypes": eff_event_types,
                 "thresholdType": fields.get("threshold_type", 0),
                 "resolveThreshold": fields.get("resolve_threshold"),
                 "comparisonDelta": fields.get("comparison_delta"),
@@ -412,21 +581,37 @@ class AlertRuleMigrator:
                 logger.error(f"Failed to migrate alert rule {pk}: {e}")
 
         issue_migrated, issue_failed, issue_skipped_other_org, issue_dropped_actions = [], [], [], []
+        issue_skipped_existing = []
         if migrate_issue:
-            issue_migrated, issue_failed, issue_skipped_other_org, issue_dropped_actions = \
+            issue_migrated, issue_failed, issue_skipped_other_org, issue_dropped_actions, issue_skipped_existing = \
                 self.migrate_issue_alerts(
                     data, org_slug, project_slugs, team_map, env_index, only_names,
                     source_pk=source_pk, user_map=user_map, slack_integration_id=slack_integration_id,
-                    pd_account_map=pd_account_map, pd_service_map=pd_service_map
+                    pd_account_map=pd_account_map, pd_service_map=pd_service_map,
+                    rebind_channel=rebind_channel, skip_project_slugs=skip_project_slugs
                 )
 
         return {
             "metric": {"migrated": migrated_rules, "failed": failed_rules,
-                       "skipped_other_org": skipped_other_org},
+                       "skipped_other_org": skipped_other_org,
+                       "skipped_existing_project": skipped_existing_project,
+                       "flagged_transaction_manual": flagged_transaction},
             "issue": {"migrated": issue_migrated, "failed": issue_failed,
                       "skipped_other_org": issue_skipped_other_org,
+                      "skipped_existing_project": issue_skipped_existing,
                       "dropped_actions": issue_dropped_actions},
         }
+
+
+def _load_skip_project_slugs(path):
+    """Merge mode: load project slugs to skip. Accepts a collision_skip_projects_*.json
+    (uses its 'projects_skip' key) or a plain JSON list. Empty set if no path given."""
+    if not path:
+        return set()
+    with open(path) as f:
+        d = json.load(f)
+    slugs = d.get("projects_skip", []) if isinstance(d, dict) else d
+    return set(slugs or [])
 
 
 def main():
@@ -443,15 +628,31 @@ def main():
                         help='(default) Dry-run is on by default; accepted for compatibility and is a no-op.')
     parser.add_argument('--skip-issue-alerts', action='store_true',
                         help='Migrate metric alerts only (skip sentry.rule issue alerts)')
-    parser.add_argument('--only', action='append', metavar='NAME',
+    parser.add_argument('--target-alert', dest='target_alert', action='append', metavar='NAME',
                         help='Only migrate alerts whose name/label exactly matches (repeatable)')
     parser.add_argument('--slack-integration-id', metavar='ID',
                         help="Destination SaaS Slack integration id. When set, issue-alert Slack "
                              "actions are recreated with this integration (channel names/ids are "
                              "kept as-is, so this assumes the same Slack workspace).")
+    parser.add_argument('--rebind-channel', action='store_true',
+                        help="Drop each Slack action's source channel_id so SaaS resolves by channel "
+                             "NAME instead. ONLY for migrating into a DIFFERENT Slack workspace than "
+                             "the source (e.g. a dummy test workspace). Leave OFF for production "
+                             "(same workspace), where the original channel_id is valid and more "
+                             "reliable (survives renames, avoids name-lookup timeouts).")
+    parser.add_argument('--override_slack_notifications_with_email',
+                        type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
+                        default=False, metavar='true|false',
+                        help='If any in-scope issue alert notifies Slack, the script errors out '
+                             'unless you pass --slack-integration-id. Set this true to instead '
+                             'replace those Slack actions with the default owner-team email.')
     parser.add_argument('--user-mappings', metavar='FILE',
                         help='user_mappings_for_teams_<tag>.json from add_sentry_members.py. Used to '
                              'remap member-targeted email actions on issue alerts.')
+    parser.add_argument('--skip-existing-projects', metavar='FILE',
+                        help='Merge mode: collision_skip_projects_*.json (or a JSON list of slugs). Alerts '
+                             'whose project already exists from a prior instance are SKIPPED so this '
+                             'instance\'s alerts are not piled onto the existing project.')
     parser.add_argument('--pagerduty-account', action='append', metavar='SRC:DEST', default=[],
                         help='Map a source PagerDuty account (integration) id to its SaaS id, e.g. '
                              '--pagerduty-account 2:987. Repeatable.')
@@ -478,13 +679,16 @@ def main():
     else:
         logger.info("=== EXECUTE: changes WILL be made to SaaS ===")
 
-    only_names = set(args.only) if args.only else None
+    only_names = set(args.target_alert) if args.target_alert else None
     migrator = AlertRuleMigrator(args.auth_token, dry_run=dry_run)
     results = migrator.migrate_alert_rules(
         args.export_file, args.org_slug, args.team_mappings_file,
         source_org=args.source_org, migrate_issue=not args.skip_issue_alerts, only_names=only_names,
         user_mappings_file=args.user_mappings, slack_integration_id=args.slack_integration_id,
         pd_account_map=pd_account_map, pd_service_map=pd_service_map,
+        override_slack_with_email=args.override_slack_notifications_with_email,
+        rebind_channel=args.rebind_channel,
+        skip_project_slugs=_load_skip_project_slugs(args.skip_existing_projects),
     )
 
     # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
@@ -495,11 +699,19 @@ def main():
     m, i = results["metric"], results["issue"]
     logger.info(
         f"Completed. Metric alerts migrated: {len(m['migrated'])}, failed: {len(m['failed'])}, "
-        f"skipped (other org): {len(m['skipped_other_org'])} | "
+        f"skipped (other org): {len(m['skipped_other_org'])}, "
+        f"skipped (existing project / merge): {len(m.get('skipped_existing_project', []))}, "
+        f"flagged for manual span rebuild: {len(m.get('flagged_transaction_manual', []))} | "
         f"Issue alerts migrated: {len(i['migrated'])}, failed: {len(i['failed'])}, "
         f"skipped (other org): {len(i['skipped_other_org'])}, "
+        f"skipped (existing project / merge): {len(i.get('skipped_existing_project', []))}, "
         f"rules with dropped actions: {len(i['dropped_actions'])}"
     )
+    flagged = m.get("flagged_transaction_manual", [])
+    if flagged:
+        logger.info(f"  {len(flagged)} transaction alert(s) need manual rebuild as span-based:")
+        for fa in flagged:
+            logger.info(f"    - '{fa['name']}': {fa['reason']}")
 
 
 import os as _rl_os, sys as _rl_sys

@@ -8,6 +8,14 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Platform fallback: SaaS rejects unknown platform values with 400 {"platform":["Invalid platform"]},
+# which fails the whole project create. `platform` is cosmetic (icon/label only) — it doesn't affect
+# ingestion, DSNs, slugs, alerts, etc. So we (1) faithfully map known-bad values to their valid
+# equivalent, and (2) as a safety net, retry any other server-rejected platform with "other" (Sentry's
+# generic catch-all). This never downgrades a platform SaaS already accepts.
+PLATFORM_FIXES = {"javascript-browser": "javascript"}
+PLATFORM_SAFE_FALLBACK = "other"
+
 
 #requires team to already exist, always uses 'migration' as the team.
 class SentryProjectManager:
@@ -64,10 +72,14 @@ class SentryProjectManager:
         # Send name AND the original slug so SaaS preserves the source slug instead of deriving
         # one from the name. The Sentry API requires 'name'; when 'slug' is also supplied it is
         # used as-is (validated for format/uniqueness) rather than re-derived.
+        platform = project_config['platform']
+        if platform in PLATFORM_FIXES:
+            logger.info(f"Platform '{platform}' -> '{PLATFORM_FIXES[platform]}' (known-invalid, mapped)")
+            platform = PLATFORM_FIXES[platform]
         payload = {
             "name": project_config['name'],
             "slug": project_config['slug'],
-            "platform": project_config['platform']
+            "platform": platform
         }
 
         if self.dry_run:
@@ -79,6 +91,17 @@ class SentryProjectManager:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
+            # Safety net: if SaaS rejected the platform, retry once with the generic catch-all so a
+            # cosmetic label never sinks the whole project.
+            body = getattr(e.response, "text", "") or ""
+            if getattr(e.response, "status_code", None) == 400 and "Invalid platform" in body \
+                    and payload["platform"] != PLATFORM_SAFE_FALLBACK:
+                logger.warning(f"Platform '{payload['platform']}' rejected by SaaS; retrying project "
+                               f"'{project_config['slug']}' with '{PLATFORM_SAFE_FALLBACK}'.")
+                payload["platform"] = PLATFORM_SAFE_FALLBACK
+                retry = requests.post(url, headers=self.headers, json=payload)
+                retry.raise_for_status()
+                return retry.json()
             logger.error(f"Failed to create project: {str(e)}")
             if hasattr(e.response, 'text'):
                 logger.error(f"Response: {e.response.text}")
@@ -110,14 +133,19 @@ class SentryProjectManager:
         return next(iter(orgs), None)
 
     def sync_projects(self, json_file_path: str, org_slug: str, delete_mode: bool = False,
-                      source_org: str = None) -> Dict[str, List[str]]:
+                      source_org: str = None, skip_slugs=None) -> Dict[str, List[str]]:
         """
         Create or delete projects from JSON file based on mode. When the export holds multiple orgs,
         `source_org` (a source org slug) selects which one's projects to migrate into `org_slug`.
+
+        `skip_slugs`: project slugs that already exist in the destination (from a prior instance's
+        migration). In a merge, the first instance wins — these are skipped, not overwritten.
         """
+        skip_slugs = set(skip_slugs or [])
         results = {
             'created': [],
             'failed': [],
+            'skipped_existing': [],
             'deleted': [],
             'delete_failed': []
         }
@@ -136,6 +164,11 @@ class SentryProjectManager:
                     if source_pk is not None and fields.get('organization') != source_pk:
                         continue
                     project_slug = fields.get('slug')
+
+                    if not delete_mode and project_slug in skip_slugs:
+                        logger.info(f"Skipping existing project (merge collision — first instance wins): {project_slug}")
+                        results['skipped_existing'].append(project_slug)
+                        continue
 
                     if delete_mode:
                         if self.delete_project(org_slug, project_slug):
@@ -163,6 +196,18 @@ class SentryProjectManager:
             logger.error(f"Project sync failed: {str(e)}")
             raise
 
+def _load_skip_projects(path):
+    """Load the set of project slugs to skip (merge collisions). Accepts a
+    collision_skip_projects_*.json (uses its 'projects_skip' key) or a plain JSON list."""
+    if not path:
+        return set()
+    import json
+    with open(path) as f:
+        d = json.load(f)
+    slugs = d.get("projects_skip", []) if isinstance(d, dict) else d
+    return set(slugs or [])
+
+
 def main():
     import sys
     import argparse
@@ -173,6 +218,10 @@ def main():
     parser.add_argument('export_file', help='JSON export file path')
     parser.add_argument('--source-org', help='Source org slug to migrate (required when the export holds multiple orgs)')
     parser.add_argument('--delete', action='store_true', help='Delete projects instead of creating them')
+    parser.add_argument('--skip-existing-projects', metavar='FILE',
+                        help='Merge mode: path to a collision_skip_projects_*.json (from collision_report.py) '
+                             'or a JSON list of project slugs. These already exist in the destination from a '
+                             'prior instance and are SKIPPED so they are not overwritten.')
     parser.add_argument('--run_on_real_data', type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
                         default=False, metavar='true|false',
                         help='Set to true to actually perform changes. Default false = dry-run.')
@@ -188,7 +237,11 @@ def main():
             logger.info("=== DRY RUN (default): no changes will be made to SaaS. Pass --run_on_real_data=true to apply. ===")
         else:
             logger.info("=== EXECUTE: changes WILL be made to SaaS ===")
-        results = manager.sync_projects(args.export_file, args.org_slug, args.delete, source_org=args.source_org)
+        skip_slugs = _load_skip_projects(args.skip_existing_projects)
+        if skip_slugs:
+            logger.info(f"Merge mode: skipping {len(skip_slugs)} project slug(s) that already exist in the destination.")
+        results = manager.sync_projects(args.export_file, args.org_slug, args.delete,
+                                        source_org=args.source_org, skip_slugs=skip_slugs)
 
         logger.info("Project management completed:")
         if args.delete:
@@ -197,6 +250,7 @@ def main():
         else:
             logger.info(f"Created projects: {len(results['created'])}")
             logger.info(f"Failed creations: {len(results['failed'])}")
+            logger.info(f"Skipped (already exist / merge collision): {len(results.get('skipped_existing', []))}")
 
         # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
         tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"

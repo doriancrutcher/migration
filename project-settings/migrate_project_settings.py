@@ -290,6 +290,10 @@ def main():
     parser.add_argument("--source-org", default=None,
                         help="Optional: restrict to this org slug (for multi-org export files)")
     parser.add_argument("--saas-url", default="https://sentry.io/api/0", help="SaaS API base URL")
+    parser.add_argument("--skip-existing-projects", metavar="FILE",
+                        help="Merge mode: collision_skip_projects_*.json (or a JSON list of slugs). Source "
+                             "projects with these slugs already exist from a prior instance and are SKIPPED "
+                             "so their existing settings are NOT overwritten.")
     parser.add_argument("--run_on_real_data", type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
                         default=False, metavar="true|false",
                         help="Set to true to actually perform changes. Default false = dry-run.")
@@ -319,11 +323,23 @@ def main():
     migrated_option_keys = set(SETTINGS_FIELD_TO_OPTION.values()) | {ERROR_MESSAGES_OPTION} \
         | {f"filters:{fid}" for fid in INBOUND_FILTER_IDS}
 
+    skip_slugs = set()
+    if args.skip_existing_projects:
+        with open(args.skip_existing_projects) as f:
+            _d = json.load(f)
+        skip_slugs = set((_d.get("projects_skip", []) if isinstance(_d, dict) else _d) or [])
+        logger.info(f"Merge mode: will skip {len(skip_slugs)} project slug(s) that already exist in the destination.")
+
     per_project = []
     unmatched = []
+    skipped_existing = []
 
     for src in src_projects:
         name = src.get("name", "") or ""
+        if src.get("slug") in skip_slugs:
+            logger.info(f"Skipping settings for existing project (merge collision — first instance wins): {src.get('slug')}")
+            skipped_existing.append({"source_name": name, "source_slug": src.get("slug")})
+            continue
         dest = dest_by_name.get(name.strip().lower())
         if not dest:
             logger.warning(f"No SaaS project named '{name}' (source slug '{src.get('slug')}') -- skipping.")
@@ -404,8 +420,10 @@ def main():
         "dry_run": args.dry_run,
         "matched_count": len(per_project),
         "unmatched_count": len(unmatched),
+        "skipped_existing_count": len(skipped_existing),
         "projects": per_project,
         "unmatched": unmatched,
+        "skipped_existing": skipped_existing,
     }
     with open("project_settings_migration_results.json", "w") as f:
         json.dump(results, f, indent=2)
@@ -413,7 +431,8 @@ def main():
     logger.info("")
     logger.info("=" * 64)
     mode = "DRY RUN (nothing written)" if args.dry_run else "LIVE"
-    logger.info(f"Summary [{mode}]: matched {len(per_project)}, unmatched {len(unmatched)}")
+    logger.info(f"Summary [{mode}]: matched {len(per_project)}, unmatched {len(unmatched)}, "
+                f"skipped-existing {len(skipped_existing)}")
     if per_project:
         name_w = max(len(p["source_name"]) for p in per_project)
         for p in per_project:

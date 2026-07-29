@@ -28,3 +28,6 @@ dryrun-out/
 
 # Per-run console logs (may contain org data)
 *.log
+
+# Test-only Slack channel list (customer-specific names)
+slack_test_channels.txt

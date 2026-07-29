@@ -6,6 +6,86 @@ All notable changes to the migration scripts, relative to the upstream baseline
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/). This project uses the
 upstream fork's own history, not semver releases; the core-scope checkpoint is tagged `v1.0-core`.
 
+## [Unreleased] - merge-collision guard + project create hardening
+
+Added support for merging a second self-hosted instance (e.g. v24) into a SaaS org that already
+holds a first instance (e.g. v25), plus resilience fixes surfaced by the large v24 run.
+
+### Added
+
+- **Merge-collision guard.** `collision_report.py` (new, read-only) compares an export against the
+  LIVE destination org and reports collisions, writing a `collision_skip_projects_*.json` skip-list.
+  A new `--skip-existing-projects FILE` flag on `create_sentry_projects.py`,
+  `migrate_project_settings.py`, and `migrate_alert_rules.py` consumes it so the second-instance run
+  **skips** colliding projects (and their settings + alerts) — first instance wins, nothing
+  overwritten. Teams need no flag: the assign-members step already MERGES members into an existing
+  team without overwriting. Off by default; single-instance runs are unaffected.
+- **`cleanup_alerts_and_monitors.py`** (new): clears metric alerts, issue alerts, cron monitors, and
+  `metric_issue` detectors from a test org (dry by default). Per-project "Error Monitor" detectors
+  are Sentry-managed and intentionally left alone (they cannot be deleted).
+
+### Fixed
+
+- **Invalid project platform no longer fails the whole project.** SaaS rejects unknown `platform`
+  values with `400 {"platform":["Invalid platform"]}` (e.g. v24's `javascript-browser`), which
+  previously sank the create. `platform` is cosmetic (icon/label only — no effect on ingestion,
+  DSNs, slug, or alerts), so `create_sentry_projects.py` now (1) maps known-bad values to their valid
+  equivalent (`javascript-browser` → `javascript`) and (2) as a safety net retries any other
+  server-rejected platform with `other`. Never downgrades an already-valid platform. Project name and
+  slug are unchanged.
+
+## [Unreleased] - alert migration: transaction→span translation, Slack guard, payload fixes
+
+Hardened `core/migrate_alert_rules.py` for the NVIDIA v24/v25 exports. Translation rules for the
+span path were verified against the Sentry source (`src/sentry/incidents/metric_issue_detector.py`,
+`src/sentry/snuba/snuba_query_validator.py`, `src/sentry/snuba/models.py`, and
+`src/sentry/search/eap/spans/{aggregates,formulas,attributes}.py`).
+
+### Added
+
+- **Transaction → span (EAP) metric-alert translation** (always-on). SaaS has disabled creating
+  transaction-dataset metric alerts (`transactions` / `generic_metrics`); the script now rebuilds them
+  on the span dataset `events_analytics_platform`: aggregate `*(transaction.duration)` →
+  `*(span.duration)`, `count()` → `count(span.duration)`, `failure_rate()` → `failure_rate()`
+  (valid on spans, identical failure definition: `sentry.status NOT IN (ok, cancelled, unknown)`);
+  source query filters (`transaction:`, `tags[...]`) are carried over verbatim with `is_transaction:true`
+  appended; `eventTypes` set to `["trace_item_span"]`, `queryType` to `1`. Aggregates with no confirmed
+  span equivalent (web-vital `measurements.*`, custom `percentile()`, `percentage()`) are recorded in a
+  new `flagged_transaction_manual` results bucket instead of being sent to fail.
+- **`--override_slack_notifications_with_email=true|false`**: if any in-scope issue alert notifies
+  Slack, the run now errors (dry-run and live) unless a Slack integration id is supplied or this flag is
+  set to replace Slack actions with the default owner-team email.
+- **`--rebind-channel`**: drops a Slack action's source `channel_id` so a *different* (e.g. dummy test)
+  workspace resolves by channel name. Off by default; production/same-workspace runs keep `channel_id`.
+- **`seed_environments.py`** (new, test-org helper): sends benign seed events per (project, environment)
+  pair so environment-scoped alerts can be created in a fresh org — environments only exist once an
+  event has been ingested. Not part of a production migration.
+- **`create_slack_channels.py`** (new, test-only): creates the dummy-workspace Slack channels referenced
+  by the alerts, for real-time alert testing. Reads a user-supplied channel list (kept out of the repo).
+
+### Changed
+
+- Renamed `--only` to **`--target-alert`** (same exact-label, repeatable behavior).
+
+### Fixed
+
+- **Filter nodes rejected as conditions**: self-hosted stores condition and filter nodes together in
+  `conditions`; SaaS requires them split. Filter nodes (`sentry.rules.filters.*`) are now routed to the
+  `filters` field. (Recovered the largest issue-alert failure bucket.)
+- **`filterMatch: null`**: rules with no filters sent `null`, which SaaS rejects. Now coerced to `"all"`.
+- **User-owned metric alerts**: owner resolution now also maps `user_id` (via `--user-mappings`), so the
+  injected default action gets a valid target instead of a null `targetIdentifier`.
+- **Native EAP alert event types**: any `events_analytics_platform` alert (translated or native) now uses
+  `["trace_item_span"]`; the source event-type codes produced invalid EAP event types before.
+
+### Notes / not yet validated live
+
+- Span translations are validated against the Sentry source, not a live API round-trip. First live run
+  should `--target-alert` one duration alert and one `failure_rate()` alert to confirm acceptance.
+- `extrapolation_mode` is not set (the classic `/alert-rules/` endpoint tolerates its absence); revisit
+  if a live run rejects on it. Exotic query fields (e.g. `transaction.op:`) map on spans in most cases
+  but are worth a live check.
+
 ## [Unreleased] - settings made export-only; org-level removed
 
 Consolidated the settings migration to be **100% export-driven** and scoped **out** org-level settings.
