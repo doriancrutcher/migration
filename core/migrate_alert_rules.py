@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 # SnubaQueryEventType.EventType -> API eventTypes string
 EVENT_TYPE_MAP = {0: "error", 1: "default", 2: "transaction"}
 
+# Metric-alert trigger-action enums, verified against Sentry source
+# (src/sentry/notifications/models/notificationaction.py: ActionService / ActionTarget).
+# The SaaS create API (POST /organizations/{org}/alert-rules/) wants string slugs, not these ints.
+_METRIC_ACTION_TYPE = {0: "email", 1: "pagerduty", 2: "slack", 3: "msteams",
+                       4: "sentry_app", 6: "opsgenie", 7: "discord"}  # 5=sentry_notification is exempt
+_METRIC_TARGET_TYPE = {0: "specific", 1: "user", 2: "team", 3: "sentry_app"}  # 4=issue_owners n/a for metric
+
+# AlertRule.Status.SNAPSHOT — an archival copy Sentry keeps when a metric alert is edited. These have
+# no project/subscription by design and must never be migrated (they'd be projectless junk in SaaS).
+ALERTRULE_STATUS_SNAPSHOT = 4
+
 # --- Transaction -> span (EAP) metric-alert translation ------------------------------------
 # SaaS has disabled creating transaction-dataset metric alerts; they must be recreated on the
 # span dataset (events_analytics_platform) with an is_transaction:true filter.
@@ -123,8 +134,24 @@ class AlertRuleMigrator:
                 out.setdefault(f.get("alert_rule"), []).append({
                     "label": f.get("label", "critical"),
                     "alertThreshold": f.get("alert_threshold", 100),
-                    "actions": [],  # NOTE: trigger actions/notifications are not carried over
+                    "actions": [],
+                    # internal: the source trigger pk, used to attach its ported alertruletriggeraction
+                    # actions in migrate_alert_rules(); stripped before the payload is sent.
+                    "_src_trigger_pk": i.get("pk"),
                 })
+        return out
+
+    def build_trigger_actions(self, data: List[Dict]) -> Dict[int, List[Dict]]:
+        """alert_rule_trigger pk -> list of its source sentry.alertruletriggeraction field dicts.
+
+        These carry the metric-alert notification targets (Slack/email/etc). Older/scrubbed exports
+        may contain zero of these rows, in which case metric alerts fall back to a default owner email.
+        """
+        out: Dict[int, List[Dict]] = {}
+        for i in data:
+            if isinstance(i, dict) and i.get("model") == "sentry.alertruletriggeraction":
+                f = i.get("fields", {})
+                out.setdefault(f.get("alert_rule_trigger"), []).append(f)
         return out
 
     def create_alert_rule(self, org_slug: str, payload: Dict) -> Dict:
@@ -238,6 +265,55 @@ class AlertRuleMigrator:
                 dropped.append(f"{aid.split('.')[-1]} (integration action, no SaaS mapping provided)")
         if not ported:
             ported = [self._default_issue_action(team_new_id)]
+        return ported, dropped
+
+    def _port_metric_actions(self, source_actions, team_map, user_map,
+                             slack_integration_id, rebind_channel=False):
+        """Re-create a metric-alert trigger's actions on SaaS from the export's
+        sentry.alertruletriggeraction rows. Mirrors _port_issue_actions but uses the metric-alert
+        trigger-action schema (verified against Sentry source), which differs from issue rules:
+          email -> {type:email,  targetType:user|team, targetIdentifier:<mapped id>}
+          slack -> {type:slack,  targetType:specific,  targetIdentifier:'#channel',
+                    integrationId:<slack_integration_id>[, inputChannelId:<raw id>]}
+        Slack integrationId is remapped to the destination via --slack-integration-id. With
+        rebind_channel the source channel id is dropped so SaaS resolves by name (cross-workspace).
+        Unmappable actions (unknown target, missing integration/app id, raw-email 'specific') are
+        dropped and recorded rather than sent with a stale id that would 400 the whole rule.
+        Returns (ported, dropped)."""
+        ported, dropped = [], []
+        for a in source_actions or []:
+            slug = _METRIC_ACTION_TYPE.get(a.get("type"))
+            if slug == "email":
+                tt = _METRIC_TARGET_TYPE.get(a.get("target_type"))
+                ident = a.get("target_identifier")
+                if tt == "team":
+                    new = team_map.get(str(ident))
+                    if new is None:
+                        dropped.append(f"email->Team {ident} (no team mapping)"); continue
+                    ported.append({"type": "email", "targetType": "team", "targetIdentifier": str(new)})
+                elif tt == "user":
+                    new = user_map.get(str(ident)) if user_map else None
+                    if new is None:
+                        dropped.append(f"email->Member {ident} (no user mapping)"); continue
+                    ported.append({"type": "email", "targetType": "user", "targetIdentifier": str(new)})
+                else:
+                    # SaaS email handler supports only user/team targets (not a raw 'specific' address).
+                    dropped.append(f"email->{tt or a.get('target_type')} (unsupported target for metric email)")
+            elif slug == "slack":
+                if not slack_integration_id:
+                    dropped.append(f"Slack {a.get('target_display')} (no --slack-integration-id given)"); continue
+                act = {"type": "slack", "targetType": "specific",
+                       "targetIdentifier": a.get("target_display"),  # e.g. '#alerts'
+                       "integrationId": int(slack_integration_id)}
+                if not rebind_channel and a.get("target_identifier"):
+                    # Same-workspace: keep the resolved channel id so SaaS validates synchronously
+                    # (201) instead of the name-lookup async path (202).
+                    act["inputChannelId"] = a.get("target_identifier")
+                ported.append(act)
+            elif slug in ("pagerduty", "opsgenie", "msteams", "discord", "sentry_app"):
+                dropped.append(f"{slug} (integration/app action, no SaaS mapping provided)")
+            else:
+                dropped.append(f"action type {a.get('type')} (unrecognized)")
         return ported, dropped
 
     def migrate_issue_alerts(self, data: List[Dict], org_slug: str,
@@ -451,11 +527,14 @@ class AlertRuleMigrator:
 
         rule_projects = self.build_rule_projects(data)
         rule_triggers = self.build_rule_triggers(data)
+        trigger_actions = self.build_trigger_actions(data)
         env_index = self.build_environments(data)
 
         skip_project_slugs = set(skip_project_slugs or [])
         migrated_rules, failed_rules, skipped_other_org, flagged_transaction = [], [], [], []
         skipped_existing_project = []
+        metric_dropped_actions = []
+        skipped_snapshot = []
 
         for item in data:
             if not isinstance(item, dict) or item.get("model") != "sentry.alertrule":
@@ -465,6 +544,13 @@ class AlertRuleMigrator:
             name = fields.get("name")
 
             if only_names is not None and name not in only_names:
+                continue
+
+            # Skip alert-rule SNAPSHOTS: archival copies (status=4) with no project/subscription.
+            # They can't and shouldn't migrate; count them as skipped rather than failed.
+            if fields.get("status") == ALERTRULE_STATUS_SNAPSHOT:
+                skipped_snapshot.append({"pk": pk, "name": name})
+                logger.info(f"Alert rule {pk} '{name}': skipped (snapshot — archival copy, no project)")
                 continue
 
             snuba_id = fields.get("snuba_query")
@@ -510,20 +596,37 @@ class AlertRuleMigrator:
                                f"pass --user-mappings so its default action has a valid target")
 
             # triggers: real thresholds from alertruletrigger (fallback to a critical trigger)
-            triggers = rule_triggers.get(pk) or [{"label": "critical", "alertThreshold": 100, "actions": []}]
+            triggers = rule_triggers.get(pk) or [{"label": "critical", "alertThreshold": 100,
+                                                  "actions": [], "_src_trigger_pk": None}]
 
-            # SaaS requires every trigger to have >=1 action (self-hosted does not).
-            # Original notification actions are NOT in the export, so we inject a default
-            # email-to-owner-team action to satisfy the API. Flag for review.
+            # Per trigger, PORT its real notification actions from the export's
+            # sentry.alertruletriggeraction rows (Slack/email/etc). SaaS requires >=1 action per
+            # trigger; if none port (or the export carries none — older/scrubbed exports), fall back
+            # to a default owner-team/user email so the rule is still created.
             if team_new_id is not None:
                 default_action = {"type": "email", "targetType": "team", "targetIdentifier": str(team_new_id)}
             elif user_new_id is not None:
                 default_action = {"type": "email", "targetType": "user", "targetIdentifier": str(user_new_id)}
             else:
                 default_action = {"type": "email", "targetType": "user", "targetIdentifier": None}
+            clean_triggers, rule_dropped = [], []
             for t in triggers:
-                if not t.get("actions"):
-                    t["actions"] = [default_action]
+                ported, dropped = self._port_metric_actions(
+                    trigger_actions.get(t.get("_src_trigger_pk"), []),
+                    team_map, user_map, slack_integration_id, rebind_channel)
+                rule_dropped.extend(dropped)
+                if not ported:
+                    ported = [default_action]
+                clean_triggers.append({
+                    "label": t.get("label", "critical"),
+                    "alertThreshold": t.get("alertThreshold", 100),
+                    "actions": ported,  # note: _src_trigger_pk is intentionally NOT sent
+                })
+            triggers = clean_triggers
+            if rule_dropped:
+                metric_dropped_actions.append({"pk": pk, "name": name, "dropped": rule_dropped})
+                logger.warning(f"Alert rule {pk} '{name}': dropped {len(rule_dropped)} unportable "
+                               f"action(s): {rule_dropped}")
 
             # Effective query fields — start from the source snuba query.
             eff_dataset = snuba.get("dataset", "events")
@@ -595,7 +698,9 @@ class AlertRuleMigrator:
             "metric": {"migrated": migrated_rules, "failed": failed_rules,
                        "skipped_other_org": skipped_other_org,
                        "skipped_existing_project": skipped_existing_project,
-                       "flagged_transaction_manual": flagged_transaction},
+                       "flagged_transaction_manual": flagged_transaction,
+                       "dropped_actions": metric_dropped_actions,
+                       "skipped_snapshot": skipped_snapshot},
             "issue": {"migrated": issue_migrated, "failed": issue_failed,
                       "skipped_other_org": issue_skipped_other_org,
                       "skipped_existing_project": issue_skipped_existing,
@@ -631,9 +736,10 @@ def main():
     parser.add_argument('--target-alert', dest='target_alert', action='append', metavar='NAME',
                         help='Only migrate alerts whose name/label exactly matches (repeatable)')
     parser.add_argument('--slack-integration-id', metavar='ID',
-                        help="Destination SaaS Slack integration id. When set, issue-alert Slack "
-                             "actions are recreated with this integration (channel names/ids are "
-                             "kept as-is, so this assumes the same Slack workspace).")
+                        help="Destination SaaS Slack integration id. When set, Slack actions on BOTH "
+                             "issue alerts and metric alerts are recreated against this integration. "
+                             "Channel ids are kept as-is (same workspace) unless --rebind-channel is "
+                             "given, which resolves by channel name instead (cross-workspace).")
     parser.add_argument('--rebind-channel', action='store_true',
                         help="Drop each Slack action's source channel_id so SaaS resolves by channel "
                              "NAME instead. ONLY for migrating into a DIFFERENT Slack workspace than "
@@ -701,7 +807,9 @@ def main():
         f"Completed. Metric alerts migrated: {len(m['migrated'])}, failed: {len(m['failed'])}, "
         f"skipped (other org): {len(m['skipped_other_org'])}, "
         f"skipped (existing project / merge): {len(m.get('skipped_existing_project', []))}, "
-        f"flagged for manual span rebuild: {len(m.get('flagged_transaction_manual', []))} | "
+        f"flagged for manual span rebuild: {len(m.get('flagged_transaction_manual', []))}, "
+        f"skipped (snapshot): {len(m.get('skipped_snapshot', []))}, "
+        f"rules with dropped actions: {len(m.get('dropped_actions', []))} | "
         f"Issue alerts migrated: {len(i['migrated'])}, failed: {len(i['failed'])}, "
         f"skipped (other org): {len(i['skipped_other_org'])}, "
         f"skipped (existing project / merge): {len(i.get('skipped_existing_project', []))}, "

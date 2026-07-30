@@ -31,3 +31,7 @@ dryrun-out/
 
 # Test-only Slack channel list (customer-specific names)
 slack_test_channels.txt
+
+# per-run collision / skip outputs (test artifacts)
+collision_skip_projects_*.json
+only_new_projects_skip.json

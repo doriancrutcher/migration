@@ -77,6 +77,22 @@ span path were verified against the Sentry source (`src/sentry/incidents/metric_
   injected default action gets a valid target instead of a null `targetIdentifier`.
 - **Native EAP alert event types**: any `events_analytics_platform` alert (translated or native) now uses
   `["trace_item_span"]`; the source event-type codes produced invalid EAP event types before.
+- **Metric-alert notification actions now migrate.** Previously the metric path never read the export's
+  actions — it always injected a default owner-team email, so Slack/PagerDuty/etc. targets were lost. It
+  now ports each trigger's `sentry.alertruletriggeraction` rows into the SaaS metric-alert trigger-action
+  schema (verified against Sentry source: `ActionService`/`ActionTarget` enums, `AlertRuleTriggerActionSerializer`):
+  Slack → `{type:slack, targetType:specific, targetIdentifier:'#channel', integrationId:<--slack-integration-id>}`
+  (honors `--rebind-channel`); email → `{type:email, targetType:user|team, targetIdentifier:<mapped id>}`.
+  Integration/app actions with no supplied mapping (PagerDuty/Opsgenie/MSTeams/Discord/SentryApp) and
+  raw-address `specific` emails are dropped and recorded (new `metric.dropped_actions` results bucket +
+  summary count). The default owner email is used only when a trigger has no portable action (e.g. an
+  older/scrubbed export with zero action rows). NOTE: requires an export that includes
+  `alertruletriggeraction` rows — scrubbed exports that strip them will still fall back to the owner email.
+- **Skip alert-rule snapshots.** Metric alerts with `status = SNAPSHOT` (4) are archival copies Sentry
+  keeps when a rule is edited; they have no project/subscription and can't migrate. They're now skipped
+  up front (new `metric.skipped_snapshot` bucket + summary count) instead of falling through to "No
+  project mapping" and inflating the failed count. On the NVIDIA v24 export this moves 12 rows from
+  "failed" to "skipped (snapshot)" on every org run.
 
 ### Notes / not yet validated live
 
