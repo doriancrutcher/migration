@@ -154,6 +154,76 @@ class AlertRuleMigrator:
                 out.setdefault(f.get("alert_rule_trigger"), []).append(f)
         return out
 
+    def build_user_id_to_member_pk(self, data: List[Dict], source_pk=None) -> Dict[str, str]:
+        """user_id -> organizationmember pk, from the export's sentry.organizationmember rows.
+
+        Alerts reference a person by their global sentry.user id (`user_id`), but add_sentry_members
+        keys its mapping file (user_mappings_for_teams) by the organizationmember *pk*. Those are two
+        different id spaces for the same person, so a user-targeted alert lookup by user_id misses a
+        map keyed by org-member pk. This bridge lets the alert step compose user_id -> org-member pk
+        -> SaaS member id and resolve them instead of dropping the notification.
+        """
+        out: Dict[str, str] = {}
+        for o in data:
+            if isinstance(o, dict) and o.get("model") == "sentry.organizationmember":
+                f = o.get("fields", {}) or {}
+                if source_pk is not None and f.get("organization") != source_pk:
+                    continue
+                uid = f.get("user_id")
+                if uid is not None:
+                    out[str(uid)] = str(o.get("pk"))
+        return out
+
+    @staticmethod
+    def _next_link(link_header: str):
+        """Parse an RFC-5988 Link header; return the next-page URL only if results="true"."""
+        if not link_header:
+            return None
+        for part in link_header.split(","):
+            seg = part.split(";")
+            if len(seg) < 2:
+                continue
+            url = seg[0].strip().strip("<>")
+            attrs = {}
+            for a in seg[1:]:
+                if "=" in a:
+                    k, v = a.strip().split("=", 1)
+                    attrs[k.strip()] = v.strip().strip('"')
+            if attrs.get("rel") == "next" and attrs.get("results") == "true":
+                return url
+        return None
+
+    def fetch_existing_metric_alerts(self, org_slug: str) -> set:
+        """Return a set of (name, project_slug) for metric alerts that already exist in the
+        destination org, for idempotent re-runs.
+
+        Metric alerts (POST /organizations/{org}/alert-rules/) are NOT de-duplicated server-side —
+        unlike issue alerts, which Sentry rejects as exact duplicates — so re-running this tool would
+        otherwise create a second copy of every metric alert. We fetch the existing rules once and
+        skip any whose (name, project) already exists. Read-only GET, so it is safe in dry-run too.
+        On any fetch error we log a warning and return an empty set so a transient failure never
+        blocks the migration (it just falls back to the old, non-deduped behavior)."""
+        existing = set()
+        url = f"{self.base_url}/organizations/{org_slug}/alert-rules/?per_page=100"
+        try:
+            while url:
+                resp = requests.get(url, headers=self.headers)
+                resp.raise_for_status()
+                for r in resp.json():
+                    nm = r.get("name")
+                    projs = r.get("projects") or []
+                    if not projs:
+                        existing.add((nm, None))
+                    for p in projs:
+                        existing.add((nm, p))
+                url = self._next_link(resp.headers.get("Link", ""))
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Could not fetch existing metric alerts for dedup ({e}); proceeding "
+                           f"WITHOUT metric-alert dedup (a re-run may create duplicate metric alerts).")
+            return set()
+        logger.info(f"Loaded {len(existing)} existing metric-alert (name, project) key(s) for dedup")
+        return existing
+
     def create_alert_rule(self, org_slug: str, payload: Dict) -> Dict:
         url = f"{self.base_url}/organizations/{org_slug}/alert-rules/"
         if self.dry_run:
@@ -502,6 +572,14 @@ class AlertRuleMigrator:
             logger.info(f"Filtering to source org '{source_org or '(only org in file)'}' (pk {source_pk})")
         team_map = self.load_team_mappings(team_mappings_file)
         user_map = self.load_user_mappings(user_mappings_file) if user_mappings_file else {}
+        # Alerts reference a person by their global user_id, but user_map is keyed by
+        # organizationmember pk (that's what add_sentry_members writes). Bridge
+        # user_id -> org-member pk -> SaaS member id so user-targeted actions/owners resolve
+        # instead of dropping. uid_map is what every user_id lookup below uses.
+        uid_to_ompk = self.build_user_id_to_member_pk(data, source_pk=source_pk)
+        uid_map = {uid: user_map[ompk] for uid, ompk in uid_to_ompk.items() if ompk in user_map}
+        if user_map:
+            logger.info(f"Built {len(uid_map)} user_id->SaaS-member mapping(s) via the org-member pk bridge")
 
         snuba_index = self.build_snuba_index(data)
         event_types = self.build_event_types(data)
@@ -531,8 +609,12 @@ class AlertRuleMigrator:
         env_index = self.build_environments(data)
 
         skip_project_slugs = set(skip_project_slugs or [])
+        # Idempotency: metric alerts don't de-dupe server-side, so fetch what already exists and
+        # skip re-creating those (name, project) pairs. GET is read-only (safe in dry-run).
+        existing_metric_keys = self.fetch_existing_metric_alerts(org_slug)
         migrated_rules, failed_rules, skipped_other_org, flagged_transaction = [], [], [], []
         skipped_existing_project = []
+        skipped_existing_alert = []
         metric_dropped_actions = []
         skipped_snapshot = []
 
@@ -582,15 +664,22 @@ class AlertRuleMigrator:
                     continue
                 projects = kept
 
+            # Idempotency: skip a metric alert that already exists in the destination (metric alerts
+            # are not de-duplicated server-side, so a re-run would otherwise create a duplicate).
+            if existing_metric_keys and any((name, s) in existing_metric_keys for s in projects):
+                skipped_existing_alert.append({"pk": pk, "name": name, "projects": projects})
+                logger.info(f"Alert rule {pk} '{name}': skipped (metric alert already exists in destination)")
+                continue
+
             # owner: map source team pk -> new SaaS team id (or user_id -> new SaaS user id)
             team_pk = fields.get("team")
             team_new_id = team_map.get(str(team_pk)) if team_pk is not None else None
             if team_pk is not None and team_new_id is None:
                 logger.warning(f"Alert rule {pk}: no team mapping for owner team pk {team_pk}; creating without owner")
-            # Some metric alerts are owned by a USER, not a team. Resolve via user mappings so the
+            # Some metric alerts are owned by a USER, not a team. Resolve via the user_id bridge so the
             # default action gets a real target instead of null (SaaS rejects a null targetIdentifier).
             user_pk = fields.get("user_id")
-            user_new_id = user_map.get(str(user_pk)) if (user_pk is not None and user_map) else None
+            user_new_id = uid_map.get(str(user_pk)) if (user_pk is not None and uid_map) else None
             if team_new_id is None and user_pk is not None and user_new_id is None:
                 logger.warning(f"Alert rule {pk}: user-owned (user_id {user_pk}) but no user mapping; "
                                f"pass --user-mappings so its default action has a valid target")
@@ -613,7 +702,7 @@ class AlertRuleMigrator:
             for t in triggers:
                 ported, dropped = self._port_metric_actions(
                     trigger_actions.get(t.get("_src_trigger_pk"), []),
-                    team_map, user_map, slack_integration_id, rebind_channel)
+                    team_map, uid_map, slack_integration_id, rebind_channel)
                 rule_dropped.extend(dropped)
                 if not ported:
                     ported = [default_action]
@@ -689,7 +778,7 @@ class AlertRuleMigrator:
             issue_migrated, issue_failed, issue_skipped_other_org, issue_dropped_actions, issue_skipped_existing = \
                 self.migrate_issue_alerts(
                     data, org_slug, project_slugs, team_map, env_index, only_names,
-                    source_pk=source_pk, user_map=user_map, slack_integration_id=slack_integration_id,
+                    source_pk=source_pk, user_map=uid_map, slack_integration_id=slack_integration_id,
                     pd_account_map=pd_account_map, pd_service_map=pd_service_map,
                     rebind_channel=rebind_channel, skip_project_slugs=skip_project_slugs
                 )
@@ -698,6 +787,7 @@ class AlertRuleMigrator:
             "metric": {"migrated": migrated_rules, "failed": failed_rules,
                        "skipped_other_org": skipped_other_org,
                        "skipped_existing_project": skipped_existing_project,
+                       "skipped_existing_alert": skipped_existing_alert,
                        "flagged_transaction_manual": flagged_transaction,
                        "dropped_actions": metric_dropped_actions,
                        "skipped_snapshot": skipped_snapshot},
@@ -754,7 +844,10 @@ def main():
                              'replace those Slack actions with the default owner-team email.')
     parser.add_argument('--user-mappings', metavar='FILE',
                         help='user_mappings_for_teams_<tag>.json from add_sentry_members.py. Used to '
-                             'remap member-targeted email actions on issue alerts.')
+                             'remap member-targeted email actions on BOTH issue and metric alerts, and '
+                             'to resolve user-owned metric-alert ownership. The file is keyed by '
+                             'organizationmember pk; this tool bridges the alert-side user_id to it via '
+                             'the export, so pass the export that contains those members.')
     parser.add_argument('--skip-existing-projects', metavar='FILE',
                         help='Merge mode: collision_skip_projects_*.json (or a JSON list of slugs). Alerts '
                              'whose project already exists from a prior instance are SKIPPED so this '
@@ -807,6 +900,7 @@ def main():
         f"Completed. Metric alerts migrated: {len(m['migrated'])}, failed: {len(m['failed'])}, "
         f"skipped (other org): {len(m['skipped_other_org'])}, "
         f"skipped (existing project / merge): {len(m.get('skipped_existing_project', []))}, "
+        f"skipped (already exists / dedup): {len(m.get('skipped_existing_alert', []))}, "
         f"flagged for manual span rebuild: {len(m.get('flagged_transaction_manual', []))}, "
         f"skipped (snapshot): {len(m.get('skipped_snapshot', []))}, "
         f"rules with dropped actions: {len(m.get('dropped_actions', []))} | "

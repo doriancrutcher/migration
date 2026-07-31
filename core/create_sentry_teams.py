@@ -178,6 +178,23 @@ class SentryTeamProjectMapper:
                 logger.error(f"Response: {e.response.text}")
             raise
 
+    def get_existing_team_id(self, org_slug: str, team_slug: str):
+        """Look up an existing team's SaaS id by slug.
+
+        Used when create_team returns 409 (the team already exists — e.g. a merge collision where a
+        prior instance/org already created a team with this slug). Without this, the colliding team
+        was recorded only as 'failed' and left OUT of team_id_mappings, so the alert step had no
+        old_pk -> SaaS id for it and created those teams' alerts with no owner. Returns the id or None.
+        """
+        url = f"{self.base_url}/organizations/{org_slug}/teams/{team_slug}/"
+        try:
+            resp = requests.get(url, headers=self.headers)
+            resp.raise_for_status()
+            return resp.json().get("id")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Could not look up existing team '{team_slug}': {e}")
+            return None
+
     def sync_project_teams(self, export_file_path: str, org_slug: str, source_org: str = None) -> Dict[str, List[str]]:
         """
         Sync team-project relationships from export file. When the export holds multiple orgs,
@@ -185,6 +202,7 @@ class SentryTeamProjectMapper:
         """
         results = {
             'teams_created': [],
+            'teams_merged': [],   # existing teams (merge collision) mapped to their existing SaaS id
             'teams_failed': [],
             'project_mappings_successful': [],
             'project_mappings_failed': [],
@@ -225,6 +243,26 @@ class SentryTeamProjectMapper:
                     })
                     
                 except Exception as e:
+                    # Merge collision: the team already exists (409). Don't drop it — look up the
+                    # existing team's id and record the old_pk -> existing id mapping so alert
+                    # ownership and email->Team actions still resolve. Members are MERGED into the
+                    # existing team by the later assign-members step (by slug), so nothing is lost.
+                    resp = getattr(e, 'response', None)
+                    is_conflict = resp is not None and getattr(resp, 'status_code', None) == 409
+                    if is_conflict and not self.dry_run:
+                        existing_id = self.get_existing_team_id(org_slug, team_data['slug'])
+                        if existing_id:
+                            results['team_id_mappings'].append({
+                                'old_pk': team_pk,
+                                'new_id': existing_id,
+                                'slug': team_data['slug'],
+                                'name': team_data['name'],
+                                'merged_existing': True,
+                            })
+                            results['teams_merged'].append(team_data['slug'])
+                            logger.info(f"Team '{team_data['slug']}' already exists (merge collision) — "
+                                        f"mapped to existing id {existing_id} for ownership/alerts")
+                            continue
                     logger.error(f"Failed to create team {team_data['name']}: {str(e)}")
                     results['teams_failed'].append(team_data['slug'])
             
@@ -281,6 +319,7 @@ def main():
         
         logger.info("Project-team sync completed:")
         logger.info(f"Teams created: {len(results['teams_created'])}")
+        logger.info(f"Teams merged (already existed, mapped): {len(results.get('teams_merged', []))}")
         logger.info(f"Teams failed: {len(results['teams_failed'])}")
         logger.info(f"Project mappings successful: {len(results['project_mappings_successful'])}")
         logger.info(f"Project mappings failed: {len(results['project_mappings_failed'])}")

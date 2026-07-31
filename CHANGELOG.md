@@ -26,6 +26,30 @@ holds a first instance (e.g. v25), plus resilience fixes surfaced by the large v
 
 ### Fixed
 
+- **Colliding teams are now mapped instead of dropped (merge runs).** When a team already exists in
+  the destination (`409 "A team with this slug already exists"` — a merge collision), `create_sentry_teams.py`
+  previously recorded it only under `teams_failed` and left it OUT of `team_id_mappings`. The alert step
+  then had no `old_pk → SaaS id` for those teams, so alerts owned by (or emailing) them were created with
+  **no owner** / dropped the team action. It now looks the existing team up by slug on 409 and records the
+  mapping (new `teams_merged` bucket, `merged_existing: true`), so ownership and `email→Team` actions
+  resolve across a merge. Members are still merged into the existing team by the assign-members step (by
+  slug), so nothing is lost. Mirrors the existing already-existing-member fix.
+- **User-targeted alert notifications no longer drop (user_id vs org-member-pk mismatch).** Alerts
+  reference a person by their global `user_id` (the alert owner and `email→Member` actions), but
+  `add_sentry_members` keys `user_mappings_for_teams` by the organizationmember **pk** — two different
+  id spaces for the same person. So `migrate_alert_rules.py` looked up the user_id in a map keyed by
+  org-member pk and missed, dropping the notification as "no user mapping" (and failing metric alerts
+  whose only target was that user). It now builds a `user_id → org-member pk → SaaS member id` bridge
+  from the export's `sentry.organizationmember` rows and uses it for every user lookup (issue +
+  metric member-email actions, and user-owned metric-alert ownership). Team assignments were never
+  affected (they key by org-member pk, which matches). Masked in earlier tests because scrubbed
+  exports stripped members, so they weren't in the map at all.
+- **Metric alerts are now de-duplicated on re-run.** Metric alerts (`POST /organizations/{org}/alert-rules/`)
+  are **not** de-duplicated server-side — unlike issue alerts, which Sentry rejects as exact duplicates —
+  so re-running the tool created a second copy of every metric alert. `migrate_alert_rules.py` now fetches
+  existing metric alerts once (read-only GET, paginated; safe in dry-run) and **skips** any whose
+  `(name, project)` already exists, recorded under `skipped_existing_alert`. A fetch failure logs a
+  warning and falls back to the prior (non-deduped) behavior rather than blocking the run.
 - **Invalid project platform no longer fails the whole project.** SaaS rejects unknown `platform`
   values with `400 {"platform":["Invalid platform"]}` (e.g. v24's `javascript-browser`), which
   previously sank the create. `platform` is cosmetic (icon/label only — no effect on ingestion,
