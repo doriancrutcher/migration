@@ -43,7 +43,7 @@ holds a first instance (e.g. v25), plus resilience fixes surfaced by the large v
 
 ## [Unreleased] - alert migration: transaction→span translation, Slack guard, payload fixes
 
-Hardened `core/migrate_alert_rules.py` for the NVIDIA v24/v25 exports. Translation rules for the
+Hardened `core/migrate_alert_rules.py` for large multi-instance self-hosted exports. Translation rules for the
 span path were verified against the Sentry source (`src/sentry/incidents/metric_issue_detector.py`,
 `src/sentry/snuba/snuba_query_validator.py`, `src/sentry/snuba/models.py`, and
 `src/sentry/search/eap/spans/{aggregates,formulas,attributes}.py`).
@@ -98,7 +98,7 @@ span path were verified against the Sentry source (`src/sentry/incidents/metric_
 - **Skip alert-rule snapshots.** Metric alerts with `status = SNAPSHOT` (4) are archival copies Sentry
   keeps when a rule is edited; they have no project/subscription and can't migrate. They're now skipped
   up front (new `metric.skipped_snapshot` bucket + summary count) instead of falling through to "No
-  project mapping" and inflating the failed count. On the NVIDIA v24 export this moves 12 rows from
+  project mapping" and inflating the failed count. On a large real export this moves 12 rows from
   "failed" to "skipped (snapshot)" on every org run.
 
 ### Notes / not yet validated live

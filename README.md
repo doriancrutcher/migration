@@ -16,9 +16,11 @@ folders.
 
 ## How the data flows
 
-The migration is **100% export-driven**. A self-hosted relocation export (Django `dumpdata`-style JSON —
-a flat list of `{"model", "pk", "fields"}` objects) is parsed and recreated/applied in SaaS. No step reads
-a live self-hosted API, so no self-hosted token or network reachability to the instance is required.
+The **core** migration (projects, teams, members, settings, alerts) is **export-driven**. A self-hosted
+relocation export (Django `dumpdata`-style JSON — a flat list of `{"model", "pk", "fields"}` objects) is
+parsed and recreated/applied in SaaS; those steps read no live self-hosted API, so they need no self-hosted
+token or network reachability. The **one exception** is the optional **dashboards** tool (Step 5), which
+reads the live self-hosted API because dashboards aren't carried in the export.
 
 ```
 self-hosted --(export)-->  export.json  --(tools + SaaS token)--> sentry.io
@@ -133,6 +135,19 @@ and the five toggle inbound filters. Org-level settings are out of scope (see ab
 #    Dry by default; add --run_on_real_data=true to apply.
 python3 project-settings/migrate_project_settings.py "$SAAS_TOKEN" "$DEST_ORG" \
   --export-file "$EXPORT" [--source-org "$SRC_ORG"] [--run_on_real_data=true]
+```
+
+### Step 5 — Custom dashboards (optional; live-API sourced)
+
+Unlike every other step, the dashboards tool reads the **live self-hosted API** — dashboards aren't in the
+relocation export — so this step needs a self-hosted read token (`SH_TOKEN`, scope `org:read`) and network
+reachability to `$SRC_URL`. It migrates **custom** dashboards only (prebuilt ones are skipped), remaps project
+references by name, and translates deprecated `discover` widgets to `error-events` / `spans`. It skips any
+dashboard whose title already exists in SaaS. SaaS token needs `org:read` + `org:write`.
+
+```bash
+python3 dashboards/migrate_dashboards.py "$SAAS_TOKEN" "$DEST_ORG" \
+  --source-token "$SH_TOKEN" --source-org "$SRC_ORG" --source-url "$SRC_URL"
 ```
 
 ### Multi-org merge

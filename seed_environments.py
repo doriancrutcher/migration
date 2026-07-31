@@ -19,8 +19,8 @@ events in the customer's projects — instead confirm real data is already flowi
 creates the environments naturally), then migrate alerts. ***
 
 Usage:
-  python3 seed_environments.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" --source-org nvidia
-  python3 seed_environments.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" --source-org nvidia --run_on_real_data=true
+  python3 seed_environments.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" --source-org my-org
+  python3 seed_environments.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" --source-org my-org --run_on_real_data=true
 """
 import argparse
 import json
