@@ -13,6 +13,7 @@ and alerts.
 |--------|-----------------|--------------|
 | `seed_selfhosted.py` | A single self-hosted org with projects, teams, members, and metric alerts | The core migration (projects, teams & membership, alert rules) |
 | `seed_multi_org.py` | Multiple orgs with **deliberately overlapping** project names, team slugs/names, and shared members | The pre-flight duplicates report (cross-org collision detection) |
+| `seed_dashboards.py` | One custom dashboard with mixed widget types (big number, time series, issue table, transaction) | The dashboards migration (`dashboards/migrate_dashboards.py`) |
 
 ## How to run
 
@@ -24,6 +25,9 @@ docker compose run --rm -T web django shell < seed_selfhosted.py
 
 # multiple overlapping orgs
 docker compose run --rm -T web django shell < seed_multi_org.py
+
+# one custom dashboard (run after seed_selfhosted.py)
+docker compose run --rm -T web django shell < seed_dashboards.py
 ```
 
 On a host with the `sentry` CLI available, `sentry django shell < seed_multi_org.py` works the same way.
