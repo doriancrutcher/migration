@@ -157,7 +157,26 @@ class SentryMemberManager:
                         error_msg = str(e)
                         if hasattr(e, 'response') and hasattr(e.response, 'text'):
                             error_msg = e.response.text
-                        
+
+                        # Member already exists in the org (shared across instances, or a prior run).
+                        # Look up their existing SaaS id and map it so their TEAM ASSIGNMENTS still
+                        # apply — otherwise assign_team_members has no id for them and skips them.
+                        if ('already been invited' in error_msg) or ('already a member' in error_msg):
+                            existing_id = self.find_member_id_by_email(org_slug, email)
+                            if existing_id:
+                                results['id_mappings']['success'][internal_id] = {
+                                    'sentry_id': existing_id,
+                                    'email': email,
+                                    'original_email': original_email,
+                                    'preexisting': True,
+                                }
+                                team_assignment_mappings['user_mappings'][internal_id] = existing_id
+                                results['stats'].setdefault('existing_mapped', 0)
+                                results['stats']['existing_mapped'] += 1
+                                logger.info(f"Member already existed; mapped existing id {existing_id} "
+                                            f"for team assignment: {email}")
+                                continue
+
                         results['id_mappings']['failed'][internal_id] = {
                             'error': error_msg,
                             'email': email,
@@ -270,6 +289,44 @@ class SentryMemberManager:
                 logger.error(f"Response: {e.response.text}")
             raise
 
+    @staticmethod
+    def _next_link(link_header):
+        if not link_header:
+            return None
+        for part in link_header.split(","):
+            if 'rel="next"' in part and 'results="true"' in part:
+                s, e = part.find("<"), part.find(">")
+                if s != -1 and e != -1:
+                    return part[s + 1:e]
+        return None
+
+    def _load_existing_members(self, org_slug: str):
+        """Fetch every existing org member once -> {email_lower: member_id}, cached. Read-only.
+        Used to map members that already exist in the org so their team assignments still apply."""
+        if getattr(self, "_existing_members", None) is not None:
+            return self._existing_members
+        out = {}
+        url = f"{self.base_url}/organizations/{org_slug}/members/"
+        params = None
+        try:
+            while url:
+                resp = requests.get(url, headers=self.headers, params=params)
+                resp.raise_for_status()
+                for m in resp.json():
+                    em = (m.get("email") or "").lower()
+                    if em and m.get("id"):
+                        out[em] = m.get("id")
+                url, params = self._next_link(resp.headers.get("Link")), None
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"  Could not list existing org members for id lookup: {e}")
+        self._existing_members = out
+        return out
+
+    def find_member_id_by_email(self, org_slug: str, email: str):
+        """Return an EXISTING org member's SaaS id by email (or None). Backed by a one-time cached
+        listing of all org members, so it doesn't depend on server-side email-query behavior."""
+        return self._load_existing_members(org_slug).get((email or "").lower())
+
 def main():
     parser = argparse.ArgumentParser(description='Add or delete members from Sentry organization')
     parser.add_argument('auth_token', help='Sentry authentication token')
@@ -322,6 +379,7 @@ def main():
 
             logger.info("Member sync completed:")
             logger.info(f"Added members: {results['stats']['added']}")
+            logger.info(f"Already existed, mapped for team assignment: {results['stats'].get('existing_mapped', 0)}")
             logger.info(f"Failed additions: {results['stats']['failed']}")
             no_email = len(results['id_mappings'].get('skipped_no_email', {}))
             logger.info(f"Skipped (inactive or no email): {results['stats']['skipped']}"

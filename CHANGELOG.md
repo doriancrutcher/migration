@@ -33,6 +33,13 @@ holds a first instance (e.g. v25), plus resilience fixes surfaced by the large v
   equivalent (`javascript-browser` → `javascript`) and (2) as a safety net retries any other
   server-rejected platform with `other`. Never downgrades an already-valid platform. Project name and
   slug are unchanged.
+- **Already-existing members now map for team assignment.** When `add_sentry_members` hit a member who
+  already exists in the org (`400 "already been invited"` — shared across instances, or a prior run), it
+  recorded them as *failed* and left them out of the `user_mappings_for_teams` file, so
+  `assign_team_members` had no id for them and **skipped their team assignments**. It now looks up the
+  existing member's SaaS id (via a one-time cached listing of org members) and adds it to the mapping, so
+  those members are assigned to their teams. New `existing_mapped` stat + summary line. Fully backward
+  compatible: on a clean fresh org there are no pre-existing members, so nothing changes.
 
 ## [Unreleased] - alert migration: transaction→span translation, Slack guard, payload fixes
 
