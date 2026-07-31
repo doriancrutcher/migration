@@ -4,6 +4,24 @@ A running record of scope/design choices made per feature -- especially things w
 deferred or excluded and may want to revisit. Newest first. Each entry: what was decided, why, and
 what would change it.
 
+## D12 - Alert migration: resolve users by user_id; make metric alerts idempotent on re-run
+
+- Feature: `feat/alert-hardening` (`migrate_alert_rules.py`)
+- Decision: (1) User-targeted alert lookups (owner, `email→Member` actions on issue and metric alerts)
+  resolve through a **`user_id → organizationmember pk → SaaS member id`** bridge built from the export,
+  rather than looking the alert's `user_id` up directly in `user_mappings_for_teams` (which is keyed by
+  org-member pk). (2) Metric-alert creation is now **idempotent**: the tool fetches existing metric alerts
+  from the destination and **skips** any `(name, project)` that already exists.
+- Why: the alert `user_id` and the mapping-file key (org-member pk) are different id spaces for the same
+  person, so member notifications were dropped even for valid, migrated users (and user-only metric alerts
+  failed). Separately, metric alerts aren't de-duplicated server-side the way issue alerts are, so a re-run
+  silently created duplicates — the guard makes re-runs safe/repeatable (matching the merge-guard philosophy).
+- Consequences: pass `--user-mappings` (the export must contain those members) for member notifications to
+  carry. Dedup uses `(name, project)`; a legitimately-renamed alert is treated as new. A dedup GET failure
+  degrades gracefully (warns, proceeds without dedup). Results add a `skipped_existing_alert` bucket.
+- Revisit if: alerts should be **updated** in place rather than skipped when they already exist (would need a
+  PUT/diff path), or dedup should key on more than name+project (e.g. thresholds) to catch edited duplicates.
+
 ## D11 - Dashboards: recreate custom dashboards, translate deprecated widget datasets
 - Feature: `feat/dashboards`
 - Decision: migrate **custom** dashboards only (prebuilt like `default-overview` are skipped). Source is the
