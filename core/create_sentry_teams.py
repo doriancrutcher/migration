@@ -19,6 +19,7 @@ class SentryTeamProjectMapper:
             "Content-Type": "application/json"
         }
         self._dry_run_team_id = 0
+        self._existing_teams = None  # cached {slug: id} of teams already in the dest org
 
     def load_export_data(self, export_file_path: str) -> List[Dict]:
         """
@@ -178,22 +179,59 @@ class SentryTeamProjectMapper:
                 logger.error(f"Response: {e.response.text}")
             raise
 
+    @staticmethod
+    def _next_link(link_header: str):
+        """Parse an RFC-5988 Link header; return the next-page URL only if results="true"."""
+        if not link_header:
+            return None
+        for part in link_header.split(","):
+            seg = part.split(";")
+            if len(seg) < 2:
+                continue
+            url = seg[0].strip().strip("<>")
+            attrs = {}
+            for a in seg[1:]:
+                if "=" in a:
+                    k, v = a.strip().split("=", 1)
+                    attrs[k.strip()] = v.strip().strip('"')
+            if attrs.get("rel") == "next" and attrs.get("results") == "true":
+                return url
+        return None
+
+    def _load_existing_teams(self, org_slug: str) -> Dict[str, str]:
+        """Fetch all teams already in the destination org once -> {slug: id}, cached.
+
+        Uses the org teams LIST endpoint (/organizations/{org}/teams/), which is the same resource
+        create posts to and is known to work with the migration token. (The per-team detail path is
+        /teams/{org}/{slug}/, NOT /organizations/{org}/teams/{slug}/ — using the list avoids that
+        gotcha and is one paginated call instead of one GET per colliding team.)
+        """
+        if self._existing_teams is not None:
+            return self._existing_teams
+        cache: Dict[str, str] = {}
+        url = f"{self.base_url}/organizations/{org_slug}/teams/?per_page=100"
+        try:
+            while url:
+                resp = requests.get(url, headers=self.headers)
+                resp.raise_for_status()
+                for t in resp.json():
+                    if t.get("slug"):
+                        cache[t["slug"]] = t.get("id")
+                url = self._next_link(resp.headers.get("Link", ""))
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Could not list existing teams for '{org_slug}': {e}")
+        self._existing_teams = cache
+        return cache
+
     def get_existing_team_id(self, org_slug: str, team_slug: str):
-        """Look up an existing team's SaaS id by slug.
+        """Return an existing team's SaaS id by slug (from the cached org-teams listing).
 
         Used when create_team returns 409 (the team already exists — e.g. a merge collision where a
         prior instance/org already created a team with this slug). Without this, the colliding team
         was recorded only as 'failed' and left OUT of team_id_mappings, so the alert step had no
         old_pk -> SaaS id for it and created those teams' alerts with no owner. Returns the id or None.
         """
-        url = f"{self.base_url}/organizations/{org_slug}/teams/{team_slug}/"
-        try:
-            resp = requests.get(url, headers=self.headers)
-            resp.raise_for_status()
-            return resp.json().get("id")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Could not look up existing team '{team_slug}': {e}")
-            return None
+        return self._load_existing_teams(org_slug).get(team_slug)
 
     def sync_project_teams(self, export_file_path: str, org_slug: str, source_org: str = None) -> Dict[str, List[str]]:
         """
