@@ -227,10 +227,16 @@ def main():
 
         # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
         tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"
-        out = f"team_member_assignments_{tag}.json"
+        # In dry mode, route results into dry-run-outputs/ so a preview file can never be mistaken
+        # for a live output. Live runs write to the current dir.
+        import os
+        outdir = "dry-run-outputs" if dry_run else "."
+        if dry_run:
+            os.makedirs(outdir, exist_ok=True)
+        out = os.path.join(outdir, f"team_member_assignments_{tag}.json")
         with open(out, 'w') as f:
             json.dump(results, f, indent=2)
-        logger.info(f"Wrote {out}")
+        logger.info(f"Wrote {out}" + (f"  [DRY-RUN preview in {outdir}/]" if dry_run else ""))
             
     except Exception as e:
         logger.error(f"Script execution failed: {str(e)}")

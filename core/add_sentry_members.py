@@ -186,6 +186,8 @@ class SentryMemberManager:
                         logger.error(f"Failed to add member {email} (original: {original_email}): {error_msg}")
             
             # Write the team assignment mappings to a separate file
+            team_assignment_mappings["_meta"] = {"dry_run": self.dry_run,
+                                                 "run_mode": "DRY_RUN" if self.dry_run else "LIVE"}
             with open(team_mappings_out, 'w') as f:
                 json.dump(team_assignment_mappings, f, indent=2)
             logger.info(f"Wrote team-assignment mappings: {team_mappings_out}")
@@ -356,6 +358,13 @@ def main():
 
         # Tag outputs with source org, dest org, and timestamp so per-org runs never overwrite.
         tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"
+        # In dry mode, route result files into a dry-run-outputs/ subdir so these placeholder-id
+        # (dryrun-N) files can never be picked up as if they were live outputs (e.g. by
+        # `ls -t ... | head -1`). Live runs write to the current dir where downstream steps read.
+        import os
+        outdir = "dry-run-outputs" if dry_run else "."
+        if dry_run:
+            os.makedirs(outdir, exist_ok=True)
 
         if args.delete:
             # Delete mode
@@ -366,14 +375,14 @@ def main():
             logger.info(f"Failed deletions: {len(results['failed'])}")
 
             # Write deletion results to file
-            out = f"member_deletion_results_{tag}.json"
+            out = os.path.join(outdir, f"member_deletion_results_{tag}.json")
             with open(out, 'w') as f:
                 json.dump(results, f, indent=2)
             logger.info(f"Wrote {out}")
 
         elif args.export_file:
             # Add mode
-            team_mappings_out = f"user_mappings_for_teams_{tag}.json"
+            team_mappings_out = os.path.join(outdir, f"user_mappings_for_teams_{tag}.json")
             results = manager.sync_members(args.export_file, args.org_slug, source_org=args.source_org,
                                            team_mappings_out=team_mappings_out)
 
@@ -386,10 +395,12 @@ def main():
                         + (f" (of which {no_email} had no email)" if no_email else ""))
 
             # Write results to file
-            out = f"member_id_mappings_{tag}.json"
+            out = os.path.join(outdir, f"member_id_mappings_{tag}.json")
+            results["_meta"] = {"dry_run": dry_run, "run_mode": "DRY_RUN" if dry_run else "LIVE"}
             with open(out, 'w') as f:
                 json.dump(results, f, indent=2)
-            logger.info(f"Wrote {out}  (pass {team_mappings_out} to assign_team_members.py)")
+            logger.info(f"Wrote {out}" + (f"  [DRY-RUN preview in {outdir}/ — NOT for downstream use]"
+                        if dry_run else f"  (pass {team_mappings_out} to assign_team_members.py)"))
         
         else:
             parser.error("Provide a positional export_file to add members, or --delete MAPPINGS_FILE to delete")

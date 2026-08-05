@@ -46,6 +46,34 @@ SPAN_DATASET = "events_analytics_platform"
 TRANSACTION_DATASETS = ("transactions", "generic_metrics")
 _DURATION_AGG = re.compile(r"^(avg|p50|p75|p90|p95|p99|p100)\(transaction\.duration\)$")
 
+# Metric-alert time windows. snuba.time_window is stored in SECONDS. Span/EAP alerts want the window
+# in SECONDS from a fixed set; classic datasets want it in MINUTES. Passing raw seconds as minutes (or
+# vice-versa) is what produced the "Invalid Time Window" 400s (e.g. a 60s window -> timeWindow:1).
+_EAP_TW_SECONDS = [300, 600, 900, 1800, 3600, 7200, 10800, 14400, 21600, 43200, 86400]
+_CLASSIC_TW_MINUTES = [1, 5, 10, 15, 30, 60, 120, 240, 1440]
+# Valid comparisonDelta (% change alerts) in MINUTES: 5m, 15m, 1h, 1d, 1w. comparison_delta is stored
+# in SECONDS, so it must be converted; passing raw seconds is what caused the ">128160" 400.
+_COMPARISON_DELTAS_MIN = [5, 15, 60, 1440, 10080]
+
+
+def _snap(value, allowed):
+    """Nearest allowed value (ties -> smaller)."""
+    return min(allowed, key=lambda a: (abs(a - value), a))
+
+
+def metric_time_window(time_window_seconds, is_eap):
+    tw = time_window_seconds if isinstance(time_window_seconds, int) and time_window_seconds > 0 else 3600
+    if is_eap:
+        return _snap(tw, _EAP_TW_SECONDS)               # seconds
+    return _snap(max(1, tw // 60), _CLASSIC_TW_MINUTES)  # minutes
+
+
+def comparison_delta_minutes(comparison_delta_seconds):
+    if comparison_delta_seconds in (None, 0):
+        return comparison_delta_seconds
+    minutes = comparison_delta_seconds // 60 if comparison_delta_seconds >= 60 else comparison_delta_seconds
+    return _snap(minutes, _COMPARISON_DELTAS_MIN)
+
 
 class AlertRuleMigrator:
     def __init__(self, auth_token: str, base_url: str = "https://sentry.io/api/0", dry_run: bool = False):
@@ -235,6 +263,7 @@ class AlertRuleMigrator:
             return response.json()
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to create alert rule: {str(e)}")
+            logger.error(f"Payload sent: {json.dumps(payload)}")  # capture on failure only (no happy-path cost)
             if hasattr(e, "response") and e.response is not None and hasattr(e.response, "text"):
                 logger.error(f"Response: {e.response.text}")
             raise
@@ -250,6 +279,7 @@ class AlertRuleMigrator:
             return response.json()
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to create issue alert rule: {str(e)}")
+            logger.error(f"Payload sent: {json.dumps(payload)}")  # capture on failure only (no happy-path cost)
             if hasattr(e, "response") and e.response is not None and hasattr(e.response, "text"):
                 logger.error(f"Response: {e.response.text}")
             raise
@@ -258,11 +288,14 @@ class AlertRuleMigrator:
     def _default_issue_action(team_new_id) -> Dict:
         """Default notification for a migrated issue alert: email the owner team, or
         fall back to the issue's suggested owners when no team maps."""
-        if team_new_id is not None:
+        if team_new_id is not None and str(team_new_id).isdigit():
             return {
                 "id": "sentry.mail.actions.NotifyEmailAction",
                 "targetType": "Team",
-                "targetIdentifier": str(team_new_id),
+                # Issue-rule endpoint requires an INTEGER targetIdentifier for Team/Member targets;
+                # a string is rejected ("targetIdentifier must be an integer") and also cascades into
+                # a spurious owner "Could not parse actor" error. Verified against the live API.
+                "targetIdentifier": int(team_new_id),
                 "fallthroughType": "ActiveMembers",
             }
         return {
@@ -297,16 +330,16 @@ class AlertRuleMigrator:
                 tt = a.get("targetType")
                 if tt == "Team":
                     new = team_map.get(str(a.get("targetIdentifier")))
-                    if new is None:
-                        dropped.append(f"email->Team {a.get('targetIdentifier')} (no team mapping)")
+                    if new is None or not str(new).isdigit():
+                        dropped.append(f"email->Team {a.get('targetIdentifier')} (unmapped/invalid team id: {new})")
                         continue
-                    out["targetIdentifier"] = str(new)
+                    out["targetIdentifier"] = int(new)  # issue-rule API requires an integer id
                 elif tt == "Member":
                     new = user_map.get(str(a.get("targetIdentifier"))) if user_map else None
-                    if new is None:
-                        dropped.append(f"email->Member {a.get('targetIdentifier')} (no user mapping)")
+                    if new is None or not str(new).isdigit():
+                        dropped.append(f"email->Member {a.get('targetIdentifier')} (unmapped/invalid user id: {new})")
                         continue
-                    out["targetIdentifier"] = str(new)
+                    out["targetIdentifier"] = int(new)  # issue-rule API requires an integer id
                 # IssueOwners (or any other targetType) has no id to remap
                 ported.append(out)
             elif "slack" in aid.lower():
@@ -391,11 +424,13 @@ class AlertRuleMigrator:
                              env_index: Dict[int, str], only_names=None, source_pk=None,
                              user_map=None, slack_integration_id=None,
                              pd_account_map=None, pd_service_map=None, rebind_channel=False,
-                             skip_project_slugs=None):
+                             skip_project_slugs=None, drop_unresolvable_owner=False,
+                             allow_partial_actions=False):
         """Recreate sentry.rule issue alerts via the project rules endpoint."""
         skip_project_slugs = set(skip_project_slugs or [])
         migrated, failed, skipped_other_org, dropped_actions = [], [], [], []
         skipped_existing_project = []
+        skipped_degraded = []   # would-be-degraded alerts skipped entirely (strict default)
         for item in data:
             if not isinstance(item, dict) or item.get("model") != "sentry.rule":
                 continue
@@ -445,6 +480,16 @@ class AlertRuleMigrator:
                 pd_account_map=pd_account_map, pd_service_map=pd_service_map,
                 rebind_channel=rebind_channel)
             if dropped:
+                # STRICT DEFAULT: if any action can't be ported, skip the whole alert rather than
+                # create a degraded one (a degraded alert is noise AND becomes a duplicate on a later,
+                # corrected run). --allow-partial-actions restores the old strip-and-create behavior.
+                if not allow_partial_actions:
+                    skipped_degraded.append({"pk": pk, "name": name, "project": project_slug,
+                                             "dropped": dropped})
+                    logger.warning(f"Issue alert {pk} '{name}': SKIPPED — {len(dropped)} action(s) "
+                                   f"unportable, not creating a degraded alert: {dropped}. "
+                                   f"Fix the cause (or pass --allow-partial-actions) and re-run.")
+                    continue
                 dropped_actions.append({"pk": pk, "name": name, "dropped": dropped})
                 logger.warning(f"Issue alert {pk} '{name}': dropped {len(dropped)} unportable "
                                f"action(s): {dropped}")
@@ -469,28 +514,72 @@ class AlertRuleMigrator:
                 "filters": split_filters,
                 "actions": actions,
             }
-            if team_new_id is not None:
+            # Guard: only set a team owner when the mapped id is a clean integer. A non-numeric value
+            # (e.g. a "dryrun-N" id from a mistakenly-passed dry-run team file) would produce
+            # owner="team:dryrun-N" and a misleading "Could not parse actor" 400. Omit it instead.
+            if team_new_id is not None and str(team_new_id).isdigit():
                 payload["owner"] = f"team:{team_new_id}"
+            elif team_new_id is not None:
+                logger.warning(f"Issue alert {pk} '{name}': owner team id {team_new_id!r} is not numeric "
+                               f"(bad team map?); omitting owner to avoid a malformed 'Could not parse actor'")
 
             try:
                 new_rule = self.create_issue_alert_rule(org_slug, project_slug, payload)
                 migrated.append(new_rule)
                 logger.info(f"Migrated issue alert '{name}' -> project {project_slug}")
             except Exception as e:
+                body = getattr(getattr(e, "response", None), "text", "") or ""
+                owner_rejected = bool(payload.get("owner")) and "Could not parse actor" in body
+                # DEFAULT: an unresolvable owner FAILS the alert, so it's visible and you decide.
+                # OPT-IN (--drop-unresolvable-owner): retry once WITHOUT the owner so the rule and its
+                # notifications still migrate (owner is suggested-assignee metadata, re-assignable later).
+                if owner_rejected and drop_unresolvable_owner:
+                    p2 = {k: v for k, v in payload.items() if k != "owner"}
+                    try:
+                        new_rule = self.create_issue_alert_rule(org_slug, project_slug, p2)
+                        migrated.append(new_rule)
+                        dropped_actions.append({"pk": pk, "name": name,
+                                                "dropped": ["owner (team not resolvable on project) — created without owner"]})
+                        logger.warning(f"Issue alert {pk} '{name}': created WITHOUT owner "
+                                       f"(--drop-unresolvable-owner); re-assign later")
+                        continue
+                    except Exception as e2:
+                        e = e2
                 failed.append((pk, str(e)))
-                logger.error(f"Failed to migrate issue alert {pk}: {e}")
-        return migrated, failed, skipped_other_org, dropped_actions, skipped_existing_project
+                if owner_rejected and not drop_unresolvable_owner:
+                    logger.error(f"Failed to migrate issue alert {pk} '{name}': owner team not resolvable "
+                                 f"on project '{project_slug}'. Re-run with --drop-unresolvable-owner to "
+                                 f"create it WITHOUT the owner instead.")
+                else:
+                    logger.error(f"Failed to migrate issue alert {pk}: {e}")
+        return (migrated, failed, skipped_other_org, dropped_actions, skipped_existing_project,
+                skipped_degraded)
 
     def load_team_mappings(self, mappings_file: str) -> Dict[str, str]:
         """old team pk -> new SaaS team id, from project_team_sync_results.json."""
         with open(mappings_file, "r") as f:
             data = json.load(f)
+        # Explicit flag guard: refuse a file created by a DRY run (placeholder ids).
+        if data.get("_meta", {}).get("dry_run") is True:
+            raise SystemExit(f"ERROR: team mapping file '{mappings_file}' is a DRY-RUN output "
+                             f"(_meta.dry_run=true) — its team ids are placeholders. Re-run "
+                             f"create_sentry_teams.py with --run_on_real_data=true and pass that file.")
         team_mappings = {}
         for mapping in data.get("team_id_mappings", []):
             old_pk = str(mapping.get("old_pk"))
             new_id = mapping.get("new_id")
             if old_pk and new_id:
                 team_mappings[old_pk] = new_id
+        # Pre-flight: a DRY-RUN team file has ids like "dryrun-N" (non-numeric). Those would build
+        # owner="team:dryrun-N" and 400 with "Could not parse actor". Fail fast so you swap in the
+        # real (live-run) team file instead of silently producing broken owners.
+        bad = {pk: v for pk, v in team_mappings.items() if not str(v).isdigit()}
+        if bad:
+            sample = list(bad.values())[:5]
+            raise SystemExit(
+                f"ERROR: team mapping file '{mappings_file}' has {len(bad)} non-numeric team id(s) "
+                f"(e.g. {sample}). This is a DRY-RUN team file — re-run create_sentry_teams.py with "
+                f"--run_on_real_data=true and pass its output here.")
         logger.info(f"Loaded {len(team_mappings)} team mappings")
         return team_mappings
 
@@ -498,7 +587,17 @@ class AlertRuleMigrator:
         """old user id -> new SaaS user id, from user_mappings_for_teams.json (add_sentry_members)."""
         with open(mappings_file, "r") as f:
             data = json.load(f)
+        # Explicit flag guard: refuse a DRY-RUN user file (placeholder member ids).
+        if data.get("_meta", {}).get("dry_run") is True:
+            raise SystemExit(f"ERROR: user mapping file '{mappings_file}' is a DRY-RUN output "
+                             f"(_meta.dry_run=true) — its member ids are placeholders. Re-run "
+                             f"add_sentry_members.py with --run_on_real_data=true and pass that file.")
         user_mappings = {str(k): str(v) for k, v in data.get("user_mappings", {}).items() if v}
+        # Also catch old dry files (pre-flag) whose ids are non-numeric placeholders (dryrun-N).
+        bad = {k: v for k, v in user_mappings.items() if not str(v).isdigit()}
+        if bad:
+            raise SystemExit(f"ERROR: user mapping file '{mappings_file}' has {len(bad)} non-numeric "
+                             f"member id(s) (e.g. {list(bad.values())[:5]}) — a DRY-RUN file. Pass the live one.")
         logger.info(f"Loaded {len(user_mappings)} user mappings")
         return user_mappings
 
@@ -565,7 +664,8 @@ class AlertRuleMigrator:
                             user_mappings_file: str = None, slack_integration_id=None,
                             pd_account_map=None, pd_service_map=None,
                             override_slack_with_email: bool = False, rebind_channel: bool = False,
-                            skip_project_slugs=None):
+                            skip_project_slugs=None, drop_unresolvable_owner: bool = False,
+                            allow_partial_actions: bool = False):
         data = self.load_export_data(export_file)
         source_pk = self.resolve_source_org_pk(data, source_org)
         if source_pk is not None:
@@ -616,6 +716,7 @@ class AlertRuleMigrator:
         skipped_existing_project = []
         skipped_existing_alert = []
         metric_dropped_actions = []
+        metric_skipped_degraded = []   # would-be-degraded metric alerts skipped entirely (strict default)
         skipped_snapshot = []
 
         for item in data:
@@ -713,6 +814,14 @@ class AlertRuleMigrator:
                 })
             triggers = clean_triggers
             if rule_dropped:
+                # STRICT DEFAULT: skip the whole metric alert rather than substitute a default/degraded
+                # notification (which is noise and duplicates on a later corrected run).
+                if not allow_partial_actions:
+                    metric_skipped_degraded.append({"pk": pk, "name": name, "dropped": rule_dropped})
+                    logger.warning(f"Alert rule {pk} '{name}': SKIPPED — {len(rule_dropped)} action(s) "
+                                   f"unportable, not creating a degraded alert: {rule_dropped}. "
+                                   f"Fix the cause (or pass --allow-partial-actions) and re-run.")
+                    continue
                 metric_dropped_actions.append({"pk": pk, "name": name, "dropped": rule_dropped})
                 logger.warning(f"Alert rule {pk} '{name}': dropped {len(rule_dropped)} unportable "
                                f"action(s): {rule_dropped}")
@@ -752,17 +861,21 @@ class AlertRuleMigrator:
                 "dataset": eff_dataset,
                 "query": eff_query,
                 "aggregate": eff_aggregate,
-                "timeWindow": snuba.get("time_window", 3600) // 60 if isinstance(snuba.get("time_window"), int) else 60,
+                "timeWindow": metric_time_window(snuba.get("time_window"), eff_dataset == SPAN_DATASET),
                 "queryType": eff_query_type,
                 "eventTypes": eff_event_types,
                 "thresholdType": fields.get("threshold_type", 0),
                 "resolveThreshold": fields.get("resolve_threshold"),
-                "comparisonDelta": fields.get("comparison_delta"),
+                "comparisonDelta": comparison_delta_minutes(fields.get("comparison_delta")),
                 "triggers": triggers,
                 "projects": projects,
             }
-            if team_new_id is not None:
+            # Guard: only set a team owner when the mapped id is a clean integer (see issue-alert note).
+            if team_new_id is not None and str(team_new_id).isdigit():
                 payload["owner"] = f"team:{team_new_id}"
+            elif team_new_id is not None:
+                logger.warning(f"Alert rule {pk} '{name}': owner team id {team_new_id!r} is not numeric "
+                               f"(bad team map?); omitting owner to avoid a malformed 'Could not parse actor'")
 
             try:
                 new_rule = self.create_alert_rule(org_slug, payload)
@@ -774,13 +887,17 @@ class AlertRuleMigrator:
 
         issue_migrated, issue_failed, issue_skipped_other_org, issue_dropped_actions = [], [], [], []
         issue_skipped_existing = []
+        issue_skipped_degraded = []
         if migrate_issue:
-            issue_migrated, issue_failed, issue_skipped_other_org, issue_dropped_actions, issue_skipped_existing = \
+            (issue_migrated, issue_failed, issue_skipped_other_org, issue_dropped_actions,
+             issue_skipped_existing, issue_skipped_degraded) = \
                 self.migrate_issue_alerts(
                     data, org_slug, project_slugs, team_map, env_index, only_names,
                     source_pk=source_pk, user_map=uid_map, slack_integration_id=slack_integration_id,
                     pd_account_map=pd_account_map, pd_service_map=pd_service_map,
-                    rebind_channel=rebind_channel, skip_project_slugs=skip_project_slugs
+                    rebind_channel=rebind_channel, skip_project_slugs=skip_project_slugs,
+                    drop_unresolvable_owner=drop_unresolvable_owner,
+                    allow_partial_actions=allow_partial_actions
                 )
 
         return {
@@ -790,11 +907,13 @@ class AlertRuleMigrator:
                        "skipped_existing_alert": skipped_existing_alert,
                        "flagged_transaction_manual": flagged_transaction,
                        "dropped_actions": metric_dropped_actions,
+                       "skipped_degraded": metric_skipped_degraded,
                        "skipped_snapshot": skipped_snapshot},
             "issue": {"migrated": issue_migrated, "failed": issue_failed,
                       "skipped_other_org": issue_skipped_other_org,
                       "skipped_existing_project": issue_skipped_existing,
-                      "dropped_actions": issue_dropped_actions},
+                      "dropped_actions": issue_dropped_actions,
+                      "skipped_degraded": issue_skipped_degraded},
         }
 
 
@@ -836,6 +955,17 @@ def main():
                              "the source (e.g. a dummy test workspace). Leave OFF for production "
                              "(same workspace), where the original channel_id is valid and more "
                              "reliable (survives renames, avoids name-lookup timeouts).")
+    parser.add_argument('--allow-partial-actions', action='store_true',
+                        help="When an alert has a notification action that can't be ported (e.g. a Slack "
+                             "channel or email target that doesn't resolve in SaaS), CREATE the alert "
+                             "anyway with that action stripped. Default OFF: such an alert is SKIPPED and "
+                             "logged (under skipped_degraded) instead of creating a partial/degraded alert "
+                             "that is noise and duplicates on a later corrected run. Fix the cause and re-run.")
+    parser.add_argument('--drop-unresolvable-owner', action='store_true',
+                        help="When an issue alert's owner team is rejected by the API (\"Could not parse "
+                             "actor\" — the team isn't resolvable on that project in the live org), create "
+                             "the alert WITHOUT the owner instead of failing it. Default OFF: such alerts "
+                             "FAIL so they're visible and you decide. The owner is re-assignable later.")
     parser.add_argument('--override_slack_notifications_with_email',
                         type=lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'y'),
                         default=False, metavar='true|false',
@@ -888,12 +1018,22 @@ def main():
         override_slack_with_email=args.override_slack_notifications_with_email,
         rebind_channel=args.rebind_channel,
         skip_project_slugs=_load_skip_project_slugs(args.skip_existing_projects),
+        drop_unresolvable_owner=args.drop_unresolvable_owner,
+        allow_partial_actions=args.allow_partial_actions,
     )
 
     # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
     tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"
-    with open(f"alert_rule_migration_results_{tag}.json", 'w') as f:
+    # In dry mode, route results into dry-run-outputs/ so a preview file can never be mistaken
+    # for a live output. Live runs write to the current dir.
+    import os
+    outdir = "dry-run-outputs" if dry_run else "."
+    if dry_run:
+        os.makedirs(outdir, exist_ok=True)
+    out = os.path.join(outdir, f"alert_rule_migration_results_{tag}.json")
+    with open(out, 'w') as f:
         json.dump(results, f, indent=2)
+    logger.info(f"Wrote {out}" + (f"  [DRY-RUN preview in {outdir}/]" if dry_run else ""))
 
     m, i = results["metric"], results["issue"]
     logger.info(
@@ -903,10 +1043,12 @@ def main():
         f"skipped (already exists / dedup): {len(m.get('skipped_existing_alert', []))}, "
         f"flagged for manual span rebuild: {len(m.get('flagged_transaction_manual', []))}, "
         f"skipped (snapshot): {len(m.get('skipped_snapshot', []))}, "
+        f"skipped (degraded/unportable action): {len(m.get('skipped_degraded', []))}, "
         f"rules with dropped actions: {len(m.get('dropped_actions', []))} | "
         f"Issue alerts migrated: {len(i['migrated'])}, failed: {len(i['failed'])}, "
         f"skipped (other org): {len(i['skipped_other_org'])}, "
         f"skipped (existing project / merge): {len(i.get('skipped_existing_project', []))}, "
+        f"skipped (degraded/unportable action): {len(i.get('skipped_degraded', []))}, "
         f"rules with dropped actions: {len(i['dropped_actions'])}"
     )
     flagged = m.get("flagged_transaction_manual", [])

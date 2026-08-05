@@ -364,10 +364,23 @@ def main():
         
         # Tag output with source org, dest org, and timestamp so per-org runs never overwrite.
         tag = f"{args.source_org or 'allorgs'}_{args.org_slug}_{datetime.now():%Y%m%d_%H%M%S}"
-        out = f"project_team_sync_results_{tag}.json"
+        # In dry mode, route the results file into a dry-run-outputs/ subdir so this fake-id
+        # (dryrun-N) file can never be picked up as if it were a live output (e.g. by
+        # `ls -t ... | head -1`). Live runs write to the current dir where the alert step reads.
+        import os
+        outdir = "dry-run-outputs" if dry_run else "."
+        if dry_run:
+            os.makedirs(outdir, exist_ok=True)
+        out = os.path.join(outdir, f"project_team_sync_results_{tag}.json")
+        # Embed an explicit dry/live flag so downstream steps can refuse a dry file even if its
+        # placeholder ids ever looked numeric. Belt-and-suspenders with the id pre-flight.
+        results["_meta"] = {"dry_run": dry_run, "run_mode": "DRY_RUN" if dry_run else "LIVE",
+                            "generated": datetime.now().isoformat(), "dest_org": args.org_slug,
+                            "source_org": args.source_org}
         with open(out, 'w') as f:
             json.dump(results, f, indent=2)
-        logger.info(f"Wrote {out}  (pass this to migrate_alert_rules.py)")
+        logger.info(f"Wrote {out}" + (f"  [DRY-RUN preview in {outdir}/ — NOT for downstream use]"
+                    if dry_run else "  (pass this to migrate_alert_rules.py)"))
 
     except Exception as e:
         logger.error(f"Script execution failed: {str(e)}")
