@@ -122,6 +122,10 @@ python3 core/assign_team_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" user_map
 python3 core/migrate_alert_rules.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" project_team_sync_results.json
 ```
 
+> **Alerts after 2026-09-24:** Sentry removed the legacy alert endpoints 3e writes to (they return 404).
+> Use [`alerts-aci/`](alerts-aci/README.md), which runs the same core logic against the new
+> Workflows / Detectors API.
+
 Add `--run_on_real_data=true` to any of these to actually write, e.g. `... create_sentry_projects.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" --run_on_real_data=true`.
 
 ### Step 4 — Project settings (export-driven)

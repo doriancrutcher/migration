@@ -1,0 +1,9 @@
+# Run inputs/outputs contain org data (names, emails, ids) — never commit them.
+*.json
+*.csv
+*.md
+!README.md
+*.html
+*.xlsx
+logs/
+dry-run-outputs/
