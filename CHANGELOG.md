@@ -6,7 +6,26 @@ All notable changes to the migration scripts, relative to the upstream baseline
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/). This project uses the
 upstream fork's own history, not semver releases; the core-scope checkpoint is tagged `v1.0-core`.
 
-## [Unreleased] - merge-collision guard + project create hardening
+## [Unreleased] - alerts on the Workflows / Detectors API (`alerts-aci/`)
+
+Sentry removed the legacy alert endpoints on 2026-09-24 (getsentry/sentry #121879), so
+`core/migrate_alert_rules.py`'s writes now 404. The core is unchanged; `alerts-aci/` wraps it.
+
+### Added
+
+- **`alerts-aci/aci_alert_migrator.py`** — subclasses `AlertRuleMigrator` and translates each legacy
+  payload into a workflow (issue alerts, attached to the project's issue-stream detector) or a workflow +
+  `metric_issue` detector (metric alerts). Client-side dedup by config fingerprint, metric alerts keep their
+  environment, member emails resolved to user ids, retries on connection resets.
+- **`alerts-aci/migrate_safe_alerts_aci.py`** — migrates a pinned target list by export pk (no name
+  fan-out). Flags: `--offline`, `--pagerduty-as-email`, `--drop-member`, `--exclude`, `--only-remaining`,
+  `--only-email`, `--create-twins`, `--skip-quota-check`, `--protect-org`. Refuses dry-run mapping files
+  and disabled/snoozed source alerts; count thresholds scaled when the EAP window widens.
+- **Read-only checks:** `verify_safe_alerts_aci.py`, `check_targets_in_org_aci.py`,
+  `validate_aci_payloads.py`, `snapshot_org_alerts.py`, `audit_all_alerts_offline.py`.
+- **`pagerduty_followup_list.py`** (PD re-add list) and **`delete_verified_aci.py`** (test orgs only).
+
+## merge-collision guard + project create hardening
 
 Added support for merging a second self-hosted instance (e.g. v24) into a SaaS org that already
 holds a first instance (e.g. v25), plus resilience fixes surfaced by the large v24 run.
