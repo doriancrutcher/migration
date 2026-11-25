@@ -2,7 +2,8 @@
 
 Hermetic: `requests` is stubbed before importing the module, so these run with plain
 `python3` -- no network, no third-party deps. `requests.post` is recorded so we can
-assert the exact payload/URL the migrator would send.
+assert the exact payload/URL the migrator would send; `requests.get` (the metric-alert dedup
+lookup) returns an empty page.
 
 Run:  python3 -m unittest discover -s tests
   or: python3 tests/test_issue_alerts.py
@@ -41,8 +42,24 @@ def _fake_post(url, headers=None, json=None):
     return _FakeResponse(json or {})
 
 
+class _FakeListResponse:
+    """GET response: an empty list page (no existing alerts), no next page."""
+    headers = {}
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return []
+
+
+def _fake_get(url, headers=None, **kwargs):
+    return _FakeListResponse()
+
+
 _fake_requests = types.ModuleType("requests")
 _fake_requests.post = _fake_post
+_fake_requests.get = _fake_get
 _fake_requests.exceptions = types.SimpleNamespace(RequestException=_FakeRequestException)
 sys.modules["requests"] = _fake_requests
 
@@ -73,7 +90,7 @@ class IssueAlertMigrationTests(unittest.TestCase):
         self.env_index = {1: "production"}
 
     def _run(self, rules, source_pk=None, user_map=None, slack_integration_id=None):
-        migrated, failed, _, _ = self.m.migrate_issue_alerts(
+        migrated, failed, _, _, *_ = self.m.migrate_issue_alerts(
             rules, "dest-org", self.project_slugs,
             self.team_map, self.env_index, source_pk=source_pk,
             user_map=user_map, slack_integration_id=slack_integration_id)
@@ -99,7 +116,7 @@ class IssueAlertMigrationTests(unittest.TestCase):
         self.assertEqual((len(migrated), len(failed)), (1, 0))
         payload = self._only_payload()["json"]
         self.assertEqual(payload["actions"][0]["targetType"], "Team")
-        self.assertEqual(payload["actions"][0]["targetIdentifier"], "99123")
+        self.assertEqual(payload["actions"][0]["targetIdentifier"], 99123)  # issue-rule API requires an int
         self.assertEqual(payload["owner"], "team:99123")
 
     def test_owner_team_unmapped_falls_back(self):
@@ -168,7 +185,7 @@ class IssueAlertMigrationTests(unittest.TestCase):
     # ---- dry-run makes no network calls ----
     def test_dry_run_does_not_post(self):
         dry = mar.AlertRuleMigrator("tok", dry_run=True)
-        migrated, failed, _, _ = dry.migrate_issue_alerts(
+        migrated, failed, _, _, *_ = dry.migrate_issue_alerts(
             [make_rule(owner_team=50)], "dest-org", self.project_slugs,
             self.team_map, self.env_index)
         self.assertEqual((len(migrated), len(failed)), (1, 0))
@@ -177,7 +194,7 @@ class IssueAlertMigrationTests(unittest.TestCase):
     # ---- source-org scoping: other-org rules skipped, not failed ----
     def test_other_org_rule_skipped_not_failed(self):
         # project 999 is not in project_slugs; with source_pk set it is another org's rule.
-        migrated, failed, skipped, _ = self.m.migrate_issue_alerts(
+        migrated, failed, skipped, _, *_ = self.m.migrate_issue_alerts(
             [make_rule(project=999)], "dest-org", self.project_slugs,
             self.team_map, self.env_index, source_pk=4510189565050880)
         self.assertEqual((len(migrated), len(failed), len(skipped)), (0, 0, 1))
@@ -185,7 +202,7 @@ class IssueAlertMigrationTests(unittest.TestCase):
 
     def test_no_source_pk_keeps_failure_semantics(self):
         # without source filtering, an unmapped project is still a failure (not skipped)
-        migrated, failed, skipped, _ = self.m.migrate_issue_alerts(
+        migrated, failed, skipped, _, *_ = self.m.migrate_issue_alerts(
             [make_rule(project=999)], "dest-org", self.project_slugs,
             self.team_map, self.env_index, source_pk=None)
         self.assertEqual((len(migrated), len(failed), len(skipped)), (0, 1, 0))
@@ -218,13 +235,13 @@ class IssueAlertMigrationTests(unittest.TestCase):
                            self._email_action("IssueOwners", ""),
                            self._slack_action(channel="#ops")]
         rule["fields"]["data"] = json.dumps(blob)
-        migrated, failed, _, dropped = self.m.migrate_issue_alerts(
+        migrated, failed, _, dropped, *_ = self.m.migrate_issue_alerts(
             [rule], "dest-org", self.project_slugs, self.team_map, self.env_index,
             user_map={}, slack_integration_id="55599")
         self.assertEqual((len(migrated), len(failed), len(dropped)), (1, 0, 0))
         acts = self._only_payload()["json"]["actions"]
         self.assertEqual(len(acts), 3)                           # all three preserved
-        self.assertEqual(acts[0]["targetIdentifier"], "99123")   # team remapped
+        self.assertEqual(acts[0]["targetIdentifier"], 99123)     # team remapped (int)
         self.assertEqual(acts[2]["workspace"], "55599")          # slack remapped
 
     def test_member_email_remapped_via_user_map(self):
@@ -232,7 +249,7 @@ class IssueAlertMigrationTests(unittest.TestCase):
         blob = json.loads(rule["fields"]["data"]); blob["actions"] = [self._email_action("Member", 54)]
         rule["fields"]["data"] = json.dumps(blob)
         self._run([rule], user_map={"54": "15012091"})
-        self.assertEqual(self._only_payload()["json"]["actions"][0]["targetIdentifier"], "15012091")
+        self.assertEqual(self._only_payload()["json"]["actions"][0]["targetIdentifier"], 15012091)
 
     def test_unportable_action_dropped_and_recorded(self):
         rule = make_rule(pk=9, owner_team=None)
@@ -240,8 +257,9 @@ class IssueAlertMigrationTests(unittest.TestCase):
         blob["actions"] = [{"id": "sentry.integrations.pagerduty.notify_action.PagerDutyNotifyServiceAction",
                             "account": "2", "service": "24", "uuid": "pd"}]
         rule["fields"]["data"] = json.dumps(blob)
-        migrated, failed, _, dropped = self.m.migrate_issue_alerts(
-            [rule], "dest-org", self.project_slugs, self.team_map, self.env_index)
+        migrated, failed, _, dropped, *_ = self.m.migrate_issue_alerts(
+            [rule], "dest-org", self.project_slugs, self.team_map, self.env_index,
+            allow_partial_actions=True)
         self.assertEqual((len(migrated), len(failed)), (1, 0))    # rule still created
         self.assertEqual(len(dropped), 1)                        # PagerDuty recorded
         # rule had only the unportable action -> default email injected so SaaS accepts it
@@ -254,7 +272,7 @@ class IssueAlertMigrationTests(unittest.TestCase):
         blob["actions"] = [{"id": "sentry.integrations.pagerduty.notify_action.PagerDutyNotifyServiceAction",
                             "account": "2", "service": "24", "severity": "default", "uuid": "pd"}]
         rule["fields"]["data"] = json.dumps(blob)
-        migrated, failed, _, dropped = self.m.migrate_issue_alerts(
+        migrated, failed, _, dropped, *_ = self.m.migrate_issue_alerts(
             [rule], "dest-org", self.project_slugs, self.team_map, self.env_index,
             pd_account_map={"2": "987"}, pd_service_map={"24": "1055"})
         self.assertEqual((len(migrated), len(failed), len(dropped)), (1, 0, 0))
@@ -270,9 +288,9 @@ class IssueAlertMigrationTests(unittest.TestCase):
         blob["actions"] = [{"id": "sentry.integrations.pagerduty.notify_action.PagerDutyNotifyServiceAction",
                             "account": "2", "service": "24", "uuid": "pd"}]
         rule["fields"]["data"] = json.dumps(blob)
-        migrated, failed, _, dropped = self.m.migrate_issue_alerts(
+        migrated, failed, _, dropped, *_ = self.m.migrate_issue_alerts(
             [rule], "dest-org", self.project_slugs, self.team_map, self.env_index,
-            pd_account_map={"2": "987"}, pd_service_map={})
+            pd_account_map={"2": "987"}, pd_service_map={}, allow_partial_actions=True)
         self.assertEqual((len(migrated), len(dropped)), (1, 1))
         self.assertIn("service 24", dropped[0]["dropped"][0])
 
@@ -280,11 +298,24 @@ class IssueAlertMigrationTests(unittest.TestCase):
         rule = make_rule(owner_team=50)
         blob = json.loads(rule["fields"]["data"]); blob["actions"] = [self._slack_action()]
         rule["fields"]["data"] = json.dumps(blob)
-        migrated, failed, _, dropped = self.m.migrate_issue_alerts(
+        migrated, failed, _, dropped, *_ = self.m.migrate_issue_alerts(
             [rule], "dest-org", self.project_slugs, self.team_map, self.env_index,
-            slack_integration_id=None)
+            slack_integration_id=None, allow_partial_actions=True)
         self.assertEqual((len(migrated), len(dropped)), (1, 1))  # dropped + fell back
         self.assertEqual(self._only_payload()["json"]["actions"][0]["targetType"], "Team")
+
+
+    def test_unportable_action_skips_alert_by_default(self):
+        # strict default: an alert that would lose an action is skipped, not created degraded
+        rule = make_rule(pk=10, owner_team=50)
+        blob = json.loads(rule["fields"]["data"]); blob["actions"] = [self._slack_action()]
+        rule["fields"]["data"] = json.dumps(blob)
+        migrated, failed, _, dropped, _, degraded = self.m.migrate_issue_alerts(
+            [rule], "dest-org", self.project_slugs, self.team_map, self.env_index,
+            slack_integration_id=None)
+        self.assertEqual((len(migrated), len(failed), len(dropped), len(degraded)), (0, 0, 0, 1))
+        self.assertEqual(degraded[0]["pk"], 10)
+        self.assertEqual(len(_POSTS), 0)
 
 
 class MigrateAlertRulesIntegrationTests(unittest.TestCase):
