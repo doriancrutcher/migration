@@ -43,8 +43,10 @@ export EXPORT=export.json       # path to the export for the org currently being
 ```
 
 Tokens: create the **SaaS token** as an Internal Integration (Org Settings → Developer Settings → Custom
-Integrations) with scopes `org:write team:write project:admin member:write alerts:write` (member invites also
-require a plan with the invite feature enabled). No self-hosted token is required — the migration is
+Integrations) with scopes `org:write team:admin project:admin member:write alerts:write` (member invites also
+require a plan with the invite feature enabled). `team:admin` lets alerts be owned by teams the token isn't a
+member of; without it Sentry rejects those owners. The person creating the integration must be an org Owner or
+Manager, since an integration can't be given more access than its creator has. No self-hosted token is required — the migration is
 export-driven. No credentials are ever committed or shipped.
 
 ### Works with any self-hosted hosting (dedicated host, VM, or local Docker)
@@ -74,6 +76,12 @@ docker compose run --rm -T -v "$PWD:/export" \
 # c) managed/dedicated hosting: have the provider/admin run the relocation export and hand you the JSON
 #    (see SOURCING.md for exactly what the provider needs to run and how to receive the file)
 ```
+
+These commands are for self-hosted **23.11.1 and later**. Older versions use the legacy global export
+(`docker compose run --rm -T -e SENTRY_LOG_LEVEL=CRITICAL web export /path/backup.json` on ≤ 23.3.0, or
+`./scripts/backup.sh` on 23.3.1–23.11.0) — see the
+[self-hosted backup docs](https://develop.sentry.dev/self-hosted/backup/). The tools were validated on v24 and
+v25 exports; dry-run everything against an older export before relying on it.
 
 For a multi-org merge, run Step 0 once per source org (`--filter-org-slugs <slug>`) to get `org1.json`,
 `org2.json`, …
@@ -116,15 +124,16 @@ python3 core/create_sentry_teams.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT"
 python3 core/add_sentry_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT"
 
 # 3d. Team membership  -> team_member_assignments.json
-python3 core/assign_team_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" user_mappings_for_teams.json
-
-# 3e. Alerts (metric + issue)  -> alert_rule_migration_results_<ts>.json
-python3 core/migrate_alert_rules.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" project_team_sync_results.json
+python3 core/assign_team_members.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" user_mappings_for_teams_<tag>.json
 ```
 
-> **Alerts after 2026-09-24:** Sentry removed the legacy alert endpoints 3e writes to (they return 404).
-> Use [`alerts-aci/`](alerts-aci/README.md), which runs the same core logic against the new
-> Workflows / Detectors API.
+Result and mapping files are tagged `<source-org>_<dest-org>_<timestamp>`; each script prints the exact path it
+wrote.
+
+**3e. Alerts (metric + issue)** — run from [`alerts-aci/`](alerts-aci/README.md). Sentry removed the legacy
+alert endpoints on 2026-09-24, so `core/migrate_alert_rules.py` can no longer write alerts (it gets 404s); it is
+kept because `alerts-aci/` reuses its logic unchanged and sends the result to the new Workflows / Detectors API.
+`alerts-aci/README.md` has the full sequence (targets file → check → dry run → validate → apply → verify).
 
 Add `--run_on_real_data=true` to any of these to actually write, e.g. `... create_sentry_projects.py "$SAAS_TOKEN" "$DEST_ORG" "$EXPORT" --run_on_real_data=true`.
 
@@ -187,9 +196,16 @@ pip install "requests>=2.31.0"
 
 ## Known limitations (carried, flagged for review)
 
-- **Alert notification actions** are not preserved; migrated rules (metric and issue) get a default
-  email-the-owner-team action only (issue alerts fall back to `IssueOwners` when a rule has no owner team).
+- **Alert notification actions:** email (team / member) and Slack actions carry over. PagerDuty needs
+  account/service id maps, or `alerts-aci --pagerduty-as-email` plus the generated follow-up list; Jira,
+  webhooks and other integration actions must be rebuilt by hand. By default an alert that would lose an action
+  is **skipped** and reported, not created without it.
+- **Member-targeted alert emails** only resolve once that member has accepted their SaaS invite.
 - **Member roles** are flattened to `member` (integration-token invite limitation).
-- **Project slugs / DSNs change** because slug isn't sent on create (SaaS derives it from the name).
+- **DSNs change** (every project gets new keys in SaaS). Project **slugs are kept**: the original slug is sent
+  on create. If a slug is already taken in the destination org, that project's create fails and is reported
+  rather than renamed.
+- **Transaction-based metric alerts** are rebuilt on the spans dataset; windows under 300 s are widened and
+  count thresholds scaled to keep the same rate.
 - **Duplicate names across instances** must be resolved before a merged run (`preflight/duplicates_report.py`
   reports them; the tools do not auto-rename).

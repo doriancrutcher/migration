@@ -6,6 +6,19 @@ All notable changes to the migration scripts, relative to the upstream baseline
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/). This project uses the
 upstream fork's own history, not semver releases; the core-scope checkpoint is tagged `v1.0-core`.
 
+## [Unreleased] - test suite + README brought up to date
+
+### Fixed
+
+- **Tests pass again** (`python3 -m unittest discover -s tests`, 49 tests). `tests/test_issue_alerts.py`
+  was written before the alert hardening: it now unpacks the six-value return of `migrate_issue_alerts`,
+  stubs `requests.get` (used by the metric-alert dedup lookup), expects integer `targetIdentifier`s (the
+  issue-rule API requires them), and passes `allow_partial_actions=True` where it tests the old
+  strip-and-create behavior. A new test covers the strict default (degraded alert skipped, nothing posted).
+- **README:** known limitations corrected (Slack/email actions do carry over, slugs are kept), token scopes
+  include `team:admin`, export commands for pre-23.11 self-hosted versions, and Step 3e points at
+  `alerts-aci/` instead of the removed legacy alert endpoints.
+
 ## [Unreleased] - alerts on the Workflows / Detectors API (`alerts-aci/`)
 
 Sentry removed the legacy alert endpoints on 2026-09-24 (getsentry/sentry #121879), so
